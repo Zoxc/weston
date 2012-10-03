@@ -489,8 +489,7 @@ create_shader_permutation(struct gl_renderer *renderer,
 
 	if (OPENGL_ES_VER)
 		append(&sb.global, "precision mediump float;\n");
-	append(&sb.global, "varying vec2 texture_coord;\n" \
-		"uniform float alpha;\n");
+	append(&sb.global, "varying vec2 texture_coord;\n");
 
 	append(&sb.body, "void main()\n{\n");
 
@@ -502,7 +501,8 @@ create_shader_permutation(struct gl_renderer *renderer,
 	add_conversion(&sb);
 
 	switch (sb.attributes[ATTRIBUTE_OUTPUT]) {
-	case OUTPUT_BLEND:
+	case OUTPUT_TRANSPARENT:
+		append(&sb.global, "uniform float alpha;\n");
 		append(&sb.body, "gl_FragColor *= alpha;\n");
 		break;
 	case OUTPUT_TO_SRGB:

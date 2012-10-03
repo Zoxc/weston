@@ -744,7 +744,8 @@ draw_surface(struct weston_surface *es, struct weston_output *output,
 	pixman_region32_t surface_blend;
 	pixman_region32_t *buffer_damage;
 	GLint filter;
-	int i;
+	int i, transparent;
+	enum gl_output_attribute output_attribute;
 
 	pixman_region32_init(&repaint);
 	pixman_region32_intersect(&repaint,
@@ -764,7 +765,10 @@ draw_surface(struct weston_surface *es, struct weston_output *output,
 		gl_shader_setup(gr->solid_shader, es, output);
 	}
 
-	shader = gl_select_shader(gr, gs->input, OUTPUT_BLEND, gs->conversion);
+	transparent = es->alpha < 1.0;
+	output_attribute = transparent ? OUTPUT_TRANSPARENT : OUTPUT_BLEND;
+
+	shader = gl_select_shader(gr, gs->input, output_attribute, gs->conversion);
 
 	gl_use_shader(gr, shader);
 	gl_shader_setup(shader, es, output);
@@ -796,13 +800,13 @@ draw_surface(struct weston_surface *es, struct weston_output *output,
 
 			struct gl_shader *rgbx_shader = gl_select_shader(gr,
 				INPUT_RGBX,
-				OUTPUT_BLEND,
+				output_attribute,
 				gs->conversion);
 			gl_use_shader(gr, rgbx_shader);
 			gl_shader_setup(rgbx_shader, es, output);
 		}
 
-		if (es->alpha < 1.0)
+		if (transparent)
 			glEnable(GL_BLEND);
 		else
 			glDisable(GL_BLEND);
@@ -930,8 +934,6 @@ draw_border(struct weston_output *output)
 	gl_use_shader(gr, shader);
 
 	gl_shader_set_output(shader, output);
-
-	glUniform1f(shader->alpha_uniform, 1);
 
 	n = texture_border(output);
 
