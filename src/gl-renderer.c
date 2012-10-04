@@ -1725,8 +1725,6 @@ gl_renderer_setup(struct weston_compositor *ec, EGLSurface egl_surface)
 			gr->has_bind_display = 0;
 	}
 
-	glActiveTexture(GL_TEXTURE0);
-
 	if (gl_init_shaders(gr) < 0)
 		return -1;
 
