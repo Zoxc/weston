@@ -96,6 +96,8 @@ struct gl_surface_state {
 	EGLImageKHR images[MAX_PLANES];
 	GLenum target;
 	int num_images;
+
+	int srgb_image;
 };
 
 struct gl_renderer {
@@ -133,6 +135,8 @@ struct gl_renderer {
 
 	int has_egl_image_external;
 
+	int has_image_srgb;
+
 	struct gl_shader *solid_shader;
 	struct gl_shader *current_shader;
 
@@ -157,6 +161,9 @@ get_renderer(struct weston_compositor *ec)
 {
 	return (struct gl_renderer *)ec->renderer;
 }
+
+int
+gl_input_type_opaque(enum gl_input_attribute input);
 
 int
 gl_init_shaders(struct gl_renderer *gr);

@@ -327,6 +327,12 @@ static struct gl_input_type_desc input_type_descs[INPUT_COUNT] = {
 	{1, shader_solid_constructor, shader_solid_uniforms},
 };
 
+int
+gl_input_type_opaque(enum gl_input_attribute input)
+{
+	return input_type_descs[input].input_class == INPUT_CLASS_OPAQUE;
+}
+
 static void
 add_to_srgb_conversion(struct shader_builder *sb)
 {

@@ -790,6 +790,11 @@ draw_surface(struct weston_surface *es, struct weston_output *output,
 				  es->geometry.width, es->geometry.height);
 	pixman_region32_subtract(&surface_blend, &surface_blend, &es->opaque);
 
+	if (pixman_region32_not_empty(&surface_blend)) {
+		glEnable(GL_BLEND);
+		repaint_surface(es, &repaint, &surface_blend);
+	}
+
 	if (pixman_region32_not_empty(&es->opaque)) {
 		if (gs->input == INPUT_RGBA) {
 			/* Special case for RGBA textures with possibly
@@ -798,10 +803,20 @@ draw_surface(struct weston_surface *es, struct weston_output *output,
 			 * Xwayland surfaces need this.
 			 */
 
-			struct gl_shader *rgbx_shader = gl_select_shader(gr,
+			enum gl_conversion_attribute conversion_attribute = gs->conversion;
+			struct gl_shader *rgbx_shader;
+
+			/* Let OpenGL do sRGB decoding if it can */
+			if(conversion_attribute == CONVERSION_FROM_SRGB && gs->srgb_image) {
+				conversion_attribute = CONVERSION_NONE;
+				glActiveTexture(GL_TEXTURE0);
+				glBindTexture(gs->target, gs->textures[1]);
+			}
+
+			rgbx_shader = gl_select_shader(gr,
 				INPUT_RGBX,
 				output_attribute,
-				gs->conversion);
+				conversion_attribute);
 			gl_use_shader(gr, rgbx_shader);
 			gl_shader_setup(rgbx_shader, es, output);
 		}
@@ -812,12 +827,6 @@ draw_surface(struct weston_surface *es, struct weston_output *output,
 			glDisable(GL_BLEND);
 
 		repaint_surface(es, &repaint, &es->opaque);
-	}
-
-	if (pixman_region32_not_empty(&surface_blend)) {
-		gl_use_shader(gr, shader);
-		glEnable(GL_BLEND);
-		repaint_surface(es, &repaint, &surface_blend);
 	}
 
 	pixman_region32_fini(&surface_blend);
@@ -1141,6 +1150,71 @@ destroy_textures(struct gl_surface_state *gs)
 	gs->num_textures = 0;
 }
 
+#ifdef EGL_MESA_image_sRGB
+static const EGLint image_gamma_linear_attribs[3] = {EGL_GAMMA_MESA, EGL_LINEAR_MESA, EGL_NONE};
+static const EGLint image_gamma_srgb_attribs[3] = {EGL_GAMMA_MESA, EGL_sRGB_MESA, EGL_NONE};
+#endif
+
+static int
+create_texture_images(struct weston_surface *es, struct wl_buffer *buffer)
+{
+	struct gl_surface_state *gs = get_surface_state(es);
+	struct weston_compositor *ec = es->compositor;
+	struct gl_renderer *gr = get_renderer(ec);
+	EGLImageKHR image, srgb_image = NULL;
+	const EGLint *attribs = NULL;
+
+#ifdef EGL_MESA_image_sRGB
+	if (ec->color_managed && gr->has_image_srgb) {
+		attribs = image_gamma_linear_attribs;
+
+		if (es->gamma != WL_CMS_GAMMA_LINEAR) {
+			srgb_image = gr->create_image(gr->egl_display,
+						 NULL,
+						 EGL_WAYLAND_BUFFER_WL,
+						 buffer, image_gamma_srgb_attribs);
+			if(srgb_image)
+				gs->srgb_image = 1;
+		}
+	}
+#endif
+
+	if (srgb_image && gl_input_type_opaque(gs->input)) {
+		image = srgb_image;
+		srgb_image = NULL;
+	} else
+		image = gr->create_image(gr->egl_display,
+					 NULL,
+					 EGL_WAYLAND_BUFFER_WL,
+					 buffer, attribs);
+
+	if (!image) {
+		if(srgb_image)
+			gr->destroy_image(gr->egl_display, srgb_image);
+
+		weston_log("failed to create img\n");
+		return -1;
+	}
+
+	gs->num_images = srgb_image ? 2 : 1;
+
+	ensure_textures(gs, gs->num_images);
+
+	gs->images[0] = image;
+	glBindTexture(gs->target, gs->textures[0]);
+	gr->image_target_texture_2d(gs->target,
+				    image);
+
+	if (srgb_image) {
+		gs->images[1] = srgb_image;
+		glBindTexture(gs->target, gs->textures[1]);
+		gr->image_target_texture_2d(gs->target,
+					    srgb_image);
+	}
+
+	return 0;
+}
+
 static void
 gl_renderer_attach(struct weston_surface *es, struct wl_buffer *buffer)
 {
@@ -1151,6 +1225,9 @@ gl_renderer_attach(struct weston_surface *es, struct wl_buffer *buffer)
 	int i, num_planes;
 
 	destroy_images(gr, gs);
+
+	gs->srgb_image = 0;
+	gs->conversion = CONVERSION_NONE;
 
 	if (!buffer) {
 		destroy_textures(gs);
@@ -1205,38 +1282,49 @@ gl_renderer_attach(struct weston_surface *es, struct wl_buffer *buffer)
 
 		assert(num_planes <= MAX_PLANES);
 
-		ensure_textures(gs, num_planes);
-		for (i = 0; i < num_planes; i++) {
-			attribs[0] = EGL_WAYLAND_PLANE_WL;
-			attribs[1] = i;
-			attribs[2] = EGL_NONE;
-			gs->images[i] = gr->create_image(gr->egl_display,
-							 NULL,
-							 EGL_WAYLAND_BUFFER_WL,
-							 buffer, attribs);
-			if (!gs->images[i]) {
-				gs->num_images = i;
-				destroy_images(gr, gs);
-				weston_log("failed to create img for plane %d\n", i);
-				return;
+		es->pitch = buffer->width;
+
+		if (num_planes > 1) {
+			ensure_textures(gs, num_planes);
+
+			for (i = 0; i < num_planes; i++) {
+				attribs[0] = EGL_WAYLAND_PLANE_WL;
+				attribs[1] = i;
+				attribs[2] = EGL_NONE;
+				gs->images[i] = gr->create_image(gr->egl_display,
+								 NULL,
+								 EGL_WAYLAND_BUFFER_WL,
+								 buffer, attribs);
+				if (!gs->images[i]) {
+					gs->num_images = i;
+					destroy_images(gr, gs);
+					weston_log("failed to create img for plane %d\n", i);
+					return;
+				}
+
+				glBindTexture(gs->target, gs->textures[i]);
+				gr->image_target_texture_2d(gs->target,
+							    gs->images[i]);
 			}
 
-			glActiveTexture(GL_TEXTURE0 + i);
-			glBindTexture(gs->target, gs->textures[i]);
-			gr->image_target_texture_2d(gs->target,
-						    gs->images[i]);
+			gs->num_images = num_planes;
+		} else {
+			if (create_texture_images(es, buffer) < 0)
+				return;
 		}
-
-		gs->num_images = num_planes;
-		es->pitch = buffer->width;
 	} else {
 		weston_log("unhandled buffer type!\n");
 	}
 
-	if (ec->color_managed)
-		gs->conversion = CONVERSION_FROM_SRGB;
-	else
+	if (!ec->color_managed) {
 		gs->conversion = CONVERSION_NONE;
+		return;
+	}
+
+	if (gl_input_type_opaque(gs->input) && gs->srgb_image)
+		gs->conversion = CONVERSION_NONE;
+	else
+		gs->conversion = CONVERSION_FROM_SRGB;
 }
 
 static void
@@ -1697,6 +1785,9 @@ gl_renderer_setup(struct weston_compositor *ec, EGLSurface egl_surface)
 
 	if (strstr(extensions, "EGL_WL_bind_wayland_display"))
 		gr->has_bind_display = 1;
+
+	if (strstr(extensions, "EGL_MESA_image_sRGB"))
+		gr->has_image_srgb = 1;
 
 	extensions = (const char *) glGetString(GL_EXTENSIONS);
 	if (!extensions) {
