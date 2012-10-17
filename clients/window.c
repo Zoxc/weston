@@ -68,6 +68,7 @@ typedef void *EGLContext;
 #include <wayland-client.h>
 #include "../shared/cairo-util.h"
 #include "text-cursor-position-client-protocol.h"
+#include "cms-client-protocol.h"
 #include "workspaces-client-protocol.h"
 #include "../shared/os-compatibility.h"
 
@@ -88,6 +89,7 @@ struct display {
 	struct wl_compositor *compositor;
 	struct wl_shell *shell;
 	struct wl_shm *shm;
+	struct wl_cms *cms;
 	struct wl_data_device_manager *data_device_manager;
 	struct text_cursor_position *text_cursor_position;
 	struct workspace_manager *workspace_manager;
@@ -3255,6 +3257,9 @@ window_create_internal(struct display *display,
 					      &shell_surface_listener, window);
 	}
 
+	if (display->cms)
+		wl_cms_set_surface_gamma(display->cms, window->surface, WL_CMS_GAMMA_LINEAR);
+
 	wl_list_init (&window->window_output_list);
 
 	return window;
@@ -3725,6 +3730,8 @@ registry_handle_global(void *data, struct wl_registry *registry, uint32_t id,
 					    id, &wl_shell_interface, 1);
 	} else if (strcmp(interface, "wl_shm") == 0) {
 		d->shm = wl_registry_bind(registry, id, &wl_shm_interface, 1);
+	} else if (strcmp(interface, "wl_cms") == 0) {
+		d->cms = wl_registry_bind(registry, id, &wl_cms_interface, 1);
 	} else if (strcmp(interface, "wl_data_device_manager") == 0) {
 		d->data_device_manager =
 			wl_registry_bind(registry, id,

@@ -22,6 +22,8 @@ simple-touch
 smoke
 tablet-shell-client-protocol.h
 tablet-shell-protocol.c
+cms-protocol.c
+cms-client-protocol.h
 text-client-protocol.h
 text-cursor-position-client-protocol.h
 text-cursor-position-protocol.c

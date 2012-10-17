@@ -83,6 +83,8 @@ libtoytoolkit_a_SOURCES =			\
 	window.h				\
 	text-cursor-position-protocol.c		\
 	text-cursor-position-client-protocol.h	\
+	cms-protocol.c		\
+	cms-client-protocol.h	\
 	workspaces-protocol.c			\
 	workspaces-client-protocol.h
 
@@ -164,6 +166,8 @@ BUILT_SOURCES =					\
 	text-client-protocol.h			\
 	input-method-protocol.c			\
 	input-method-client-protocol.h		\
+	cms-protocol.c			\
+	cms-client-protocol.h		\
 	desktop-shell-client-protocol.h		\
 	desktop-shell-protocol.c		\
 	tablet-shell-client-protocol.h		\
