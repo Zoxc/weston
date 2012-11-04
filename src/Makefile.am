@@ -23,6 +23,9 @@ weston_SOURCES =				\
 	clipboard.c				\
 	text-cursor-position-protocol.c		\
 	text-cursor-position-server-protocol.h	\
+	cms.c			\
+	cms-protocol.c		\
+	cms-server-protocol.h		\
 	zoom.c					\
 	text-backend.c				\
 	text-protocol.c				\
@@ -218,6 +221,8 @@ BUILT_SOURCES =					\
 	tablet-shell-server-protocol.h		\
 	desktop-shell-protocol.c		\
 	desktop-shell-server-protocol.h		\
+	cms-protocol.c		\
+	cms-server-protocol.h		\
 	text-protocol.c				\
 	text-server-protocol.h			\
 	input-method-protocol.c			\

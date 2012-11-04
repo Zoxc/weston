@@ -29,6 +29,7 @@
 #include <xkbcommon/xkbcommon.h>
 #include <wayland-server.h>
 
+#include "cms-server-protocol.h"
 #include "matrix.h"
 #include "../shared/config-parser.h"
 
@@ -390,6 +391,7 @@ struct weston_surface {
 	struct wl_list layer_link;
 	float alpha;
 	struct weston_plane *plane;
+	enum wl_cms_gamma gamma;
 
 	void *renderer_state;
 
@@ -743,6 +745,9 @@ tty_reset(struct tty *tty);
 
 int
 tty_activate_vt(struct tty *tty, int vt);
+
+void
+cms_create(struct weston_compositor *ec);
 
 void
 screenshooter_create(struct weston_compositor *ec);

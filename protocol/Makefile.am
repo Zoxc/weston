@@ -5,4 +5,5 @@ EXTRA_DIST =					\
 	xserver.xml				\
 	text.xml				\
 	input-method.xml			\
+	cms.xml		\
 	workspaces.xml
