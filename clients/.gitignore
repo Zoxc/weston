@@ -15,6 +15,7 @@ libtoytoolkit.a
 resizor
 screenshooter-client-protocol.h
 screenshooter-protocol.c
+egl-info
 simple-egl
 simple-shm
 simple-touch

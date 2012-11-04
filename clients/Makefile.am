@@ -41,7 +41,12 @@ endif
 
 if BUILD_SIMPLE_EGL_CLIENTS
 simple_egl_clients_programs =			\
+	egl-info				\
 	simple-egl
+
+egl_info_SOURCES = egl-info.c
+egl_info_CPPFLAGS = $(SIMPLE_EGL_CLIENT_CFLAGS)
+egl_info_LDADD = $(SIMPLE_EGL_CLIENT_LIBS) -lm
 
 simple_egl_SOURCES = simple-egl.c
 simple_egl_CPPFLAGS = $(SIMPLE_EGL_CLIENT_CFLAGS)
