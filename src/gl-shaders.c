@@ -225,13 +225,12 @@ shader_yuv_constructor(struct shader_builder *sb)
 	}
 
 	append(&sb->body, sample);
-	append(&sb->body,
-		"yuv = vec3(1.16438356 * (yuv.x - 0.0625), yuv.yz - 0.5);\n" \
-		"gl_FragColor.r = yuv.x + 1.59602678 * yuv.z;\n" \
-		"gl_FragColor.g = yuv.x - 0.39176229 * yuv.y - " \
-			"0.81296764 * yuv.z;\n" \
-		"gl_FragColor.b = yuv.x + 2.01723214 * yuv.y;\n" \
-		"gl_FragColor.a = 1.0;\n");
+	append(&sb->body,  "yuv = yuv * vec3(1.16438356, 1.0, 0.81296764) - " \
+			"vec3(0.07277397, 0.5, 0.40648382);\n" \
+		"vec3 diff = vec3(yuv.x, yuv.x - yuv.z, 1.0);\n" \
+		"gl_FragColor = yuv.zyyy * " \
+			"vec4(1.96321071, -0.39176229, 2.01723214, 0.0) + " \
+			"diff.xyxz;\n");
 
 	return 1;
 }
