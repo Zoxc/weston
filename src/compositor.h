@@ -324,6 +324,8 @@ struct weston_compositor {
 	struct weston_plane primary_plane;
 	int fan_debug;
 
+	int color_managed;
+
 	uint32_t focus;
 
 	struct weston_renderer *renderer;

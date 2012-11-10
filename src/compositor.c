@@ -2795,10 +2795,15 @@ weston_compositor_init(struct weston_compositor *ec,
 		{ "keymap_variant", CONFIG_KEY_STRING, &xkb_names.variant },
 		{ "keymap_options", CONFIG_KEY_STRING, &xkb_names.options },
         };
+        const struct config_key compositor_config_keys[] = {
+                { "color-managed", CONFIG_KEY_BOOLEAN, &ec->color_managed },
+        };
 	const struct config_section cs[] = {
                 { "keyboard",
                   keyboard_config_keys, ARRAY_LENGTH(keyboard_config_keys) },
-	};
+                { "compositor",
+                  compositor_config_keys, ARRAY_LENGTH(compositor_config_keys) },
+        };
 
 	memset(&xkb_names, 0, sizeof(xkb_names));
 	parse_config_file(config_file, cs, ARRAY_LENGTH(cs), ec);

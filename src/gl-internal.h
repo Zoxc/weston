@@ -47,11 +47,13 @@ enum gl_shader_attribute {
 
 enum gl_conversion_attribute {
 	CONVERSION_NONE,
+	CONVERSION_FROM_SRGB,
 	CONVERSION_COUNT
 };
 
 enum gl_output_attribute {
 	OUTPUT_BLEND,
+	OUTPUT_TO_SRGB,
 	OUTPUT_COUNT
 };
 
@@ -85,6 +87,7 @@ struct gl_output_state {
 struct gl_surface_state {
 	GLfloat color[4];
 	enum gl_input_attribute input;
+	enum gl_conversion_attribute conversion;
 
 	GLuint textures[MAX_PLANES];
 	int num_textures;
@@ -108,8 +111,12 @@ struct gl_renderer {
 		int32_t width, height;
 	} border;
 
+	GLuint srgb_decode_lut;
+	GLuint srgb_encode_lut;
+
 	GLenum bgra_internal_format, bgra_format;
 	GLenum rgba16_internal_format;
+	GLenum l16_internal_format;
 	GLenum short_type;
 
 	PFNGLEGLIMAGETARGETTEXTURE2DOESPROC image_target_texture_2d;
@@ -153,6 +160,9 @@ get_renderer(struct weston_compositor *ec)
 int
 gl_init_shaders(struct gl_renderer *gr);
 
+int
+gl_compile_shaders(struct gl_renderer *gr);
+
 void
 gl_destroy_shaders(struct gl_renderer *gr);
 
@@ -167,7 +177,8 @@ gl_use_shader(struct gl_renderer *gr,
 struct gl_shader *
 gl_select_shader(struct gl_renderer *gr,
 			enum gl_input_attribute input,
-			enum gl_output_attribute output);
+			enum gl_output_attribute output,
+			enum gl_conversion_attribute conversion);
 
 void
 gl_shader_setup(struct gl_shader *shader,

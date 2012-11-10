@@ -687,7 +687,10 @@ repaint_surfaces_start(struct weston_output *output, pixman_region32_t *damage)
 {
 	struct gl_output_state *go = get_output_state(output);
 
-	go->indirect_drawing = 0 && !go->indirect_disable;
+	go->indirect_drawing = output->compositor->color_managed;
+
+	if (go->indirect_disable)
+		go->indirect_drawing = 0;
 
 	if (go->indirect_drawing) {
 		glBindFramebuffer(GL_FRAMEBUFFER, go->indirect_fbo);
@@ -707,11 +710,16 @@ repaint_surfaces_finish(struct weston_output *output, pixman_region32_t *damage)
 	if (go->indirect_drawing) {
 		glBindFramebuffer(GL_FRAMEBUFFER, 0);
 
-		shader = gl_select_shader(gr, INPUT_RGBX, OUTPUT_BLEND);
+		shader = gl_select_shader(gr,
+			INPUT_RGBX,
+			OUTPUT_TO_SRGB,
+			CONVERSION_NONE);
 
 		gl_use_shader(gr, shader);
 		gl_shader_set_output(shader, output);
-		glUniform1f(shader->alpha_uniform, 1.0);
+
+		glActiveTexture(GL_TEXTURE0 + MAX_PLANES);
+		glBindTexture(GL_TEXTURE_2D, gr->srgb_encode_lut);
 
 		glDisable(GL_BLEND);
 
@@ -756,7 +764,7 @@ draw_surface(struct weston_surface *es, struct weston_output *output,
 		gl_shader_setup(gr->solid_shader, es, output);
 	}
 
-	shader = gl_select_shader(gr, gs->input, OUTPUT_BLEND);
+	shader = gl_select_shader(gr, gs->input, OUTPUT_BLEND, gs->conversion);
 
 	gl_use_shader(gr, shader);
 	gl_shader_setup(shader, es, output);
@@ -786,7 +794,10 @@ draw_surface(struct weston_surface *es, struct weston_output *output,
 			 * Xwayland surfaces need this.
 			 */
 
-			struct gl_shader *rgbx_shader = gl_select_shader(gr, INPUT_RGBX, OUTPUT_BLEND);
+			struct gl_shader *rgbx_shader = gl_select_shader(gr,
+				INPUT_RGBX,
+				OUTPUT_BLEND,
+				gs->conversion);
 			gl_use_shader(gr, rgbx_shader);
 			gl_shader_setup(rgbx_shader, es, output);
 		}
@@ -912,7 +923,8 @@ draw_border(struct weston_output *output)
 	GLfloat *v;
 	int n;
 
-	shader = gl_select_shader(gr, INPUT_RGBA, OUTPUT_BLEND);
+	shader = gl_select_shader(gr, INPUT_RGBA, OUTPUT_BLEND,
+		CONVERSION_NONE);
 
 	glDisable(GL_BLEND);
 	gl_use_shader(gr, shader);
@@ -1204,6 +1216,11 @@ gl_renderer_attach(struct weston_surface *es, struct wl_buffer *buffer)
 	} else {
 		weston_log("unhandled buffer type!\n");
 	}
+
+	if (ec->color_managed)
+		gs->conversion = CONVERSION_FROM_SRGB;
+	else
+		gs->conversion = CONVERSION_NONE;
 }
 
 static void
@@ -1218,6 +1235,7 @@ gl_renderer_surface_set_color(struct weston_surface *surface,
 	gs->color[3] = alpha;
 
 	gs->input = INPUT_SOLID;
+	gs->conversion = CONVERSION_NONE;
 }
 
 static int
@@ -1578,7 +1596,7 @@ fragment_debug_binding(struct wl_seat *seat, uint32_t time, uint32_t key,
 
 	gr->fragment_shader_debug ^= 1;
 
-	gl_init_shaders(gr);
+	gl_compile_shaders(gr);
 	weston_compositor_damage_all(ec);
 }
 
@@ -1588,6 +1606,7 @@ gl_renderer_setup(struct weston_compositor *ec, EGLSurface egl_surface)
 	struct gl_renderer *gr = get_renderer(ec);
 	const char *extensions;
 	EGLBoolean ret;
+	GLint param;
 
 #ifdef BUILD_OPENGL
 	static const EGLint context_attribs[] = {
@@ -1600,6 +1619,7 @@ gl_renderer_setup(struct weston_compositor *ec, EGLSurface egl_surface)
 	gr->bgra_format = GL_BGRA;
 	gr->short_type = GL_UNSIGNED_SHORT;
 	gr->rgba16_internal_format = GL_RGBA16;
+	gr->l16_internal_format = GL_LUMINANCE16;
 #else
 	static const EGLint context_attribs[] = {
 		EGL_CONTEXT_CLIENT_VERSION, 2,
@@ -1610,6 +1630,7 @@ gl_renderer_setup(struct weston_compositor *ec, EGLSurface egl_surface)
 	gr->bgra_format = GL_BGRA_EXT;
 	gr->short_type = GL_UNSIGNED_BYTE;
 	gr->rgba16_internal_format = GL_RGBA;
+	gr->l16_internal_format = GL_LUMINANCE;
 #endif
 
 	if (!eglBindAPI(OPENGL_ES_VER ? EGL_OPENGL_ES_API : EGL_OPENGL_API)) {
@@ -1672,6 +1693,16 @@ gl_renderer_setup(struct weston_compositor *ec, EGLSurface egl_surface)
 
 	if (OPENGL_ES_VER && !strstr(extensions, "GL_EXT_texture_format_BGRA8888")) {
 		weston_log("GL_EXT_texture_format_BGRA8888 not available\n");
+		return -1;
+	}
+
+	glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &param);
+
+	if (ec->color_managed)
+		param--;
+
+	if (param < MAX_PLANES) {
+		weston_log("Too few OpenGL texture units available\n");
 		return -1;
 	}
 
