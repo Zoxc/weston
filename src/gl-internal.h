@@ -75,6 +75,11 @@ struct gl_shader {
 
 struct gl_output_state {
 	EGLSurface egl_surface;
+
+	int indirect_disable;
+	int indirect_drawing;
+	GLuint indirect_texture;
+	GLuint indirect_fbo;
 };
 
 struct gl_surface_state {

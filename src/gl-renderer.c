@@ -529,23 +529,12 @@ triangle_fan_debug(struct weston_surface *surface, int first, int count)
 }
 
 static void
-repaint_region(struct weston_surface *es, pixman_region32_t *region,
-		pixman_region32_t *surf_region)
+repaint_region(struct weston_compositor *ec, struct weston_surface *es,
+		int nfans)
 {
-	struct weston_compositor *ec = es->compositor;
 	GLfloat *v;
 	unsigned int *vtxcnt;
-	int i, first, nfans;
-
-	/* The final region to be painted is the intersection of
-	 * 'region' and 'surf_region'. However, 'region' is in the global
-	 * coordinates, and 'surf_region' is in the surface-local
-	 * coordinates. texture_region() will iterate over all pairs of
-	 * rectangles from both regions, compute the intersection
-	 * polygon for each pair, and store it as a triangle fan if
-	 * it has a non-zero area (at least 3 vertices, actually).
-	 */
-	nfans = texture_region(es, region, surf_region);
+	int i, first;
 
 	v = ec->vertices.data;
 	vtxcnt = ec->vtxcnt.data;
@@ -560,7 +549,7 @@ repaint_region(struct weston_surface *es, pixman_region32_t *region,
 
 	for (i = 0, first = 0; i < nfans; i++) {
 		glDrawArrays(GL_TRIANGLE_FAN, first, vtxcnt[i]);
-		if (ec->fan_debug)
+		if (es && ec->fan_debug)
 			triangle_fan_debug(es, first, vtxcnt[i]);
 		first += vtxcnt[i];
 	}
@@ -593,6 +582,144 @@ use_output(struct weston_output *output)
 	}
 
 	return 0;
+}
+
+static void
+repaint_surface(struct weston_surface *es, pixman_region32_t *region,
+		pixman_region32_t *surf_region)
+{
+	/* The final region to be painted is the intersection of
+	 * 'region' and 'surf_region'. However, 'region' is in the global
+	 * coordinates, and 'surf_region' is in the surface-local
+	 * coordinates. texture_region() will iterate over all pairs of
+	 * rectangles from both regions, compute the intersection
+	 * polygon for each pair, and store it as a triangle fan if
+	 * it has a non-zero area (at least 3 vertices, actually).
+	 */
+	int nfans = texture_region(es, region, surf_region);
+
+	repaint_region(es->compositor, es, nfans);
+}
+
+static void
+output_emit_vertex(struct weston_output *output, GLfloat **v, int32_t x, int32_t y)
+{
+	struct weston_vector vector;
+
+	/* position: */
+	*((*v)++) = x;
+	*((*v)++) = y;
+
+	/* texcoord: */
+
+	vector.f[0] = x;
+	vector.f[1] = y;
+	vector.f[2] = 0.0f;
+	vector.f[3] = 1.0f;
+
+	weston_matrix_transform(&output->matrix, &vector);
+
+	*((*v)++) = (vector.f[0] + 1.0f) * 0.5f;
+	*((*v)++) = (vector.f[1] + 1.0f) * 0.5f;
+}
+
+static void
+repaint_output(struct weston_output *output, pixman_region32_t *region)
+{
+	struct weston_compositor *ec = output->compositor;
+	GLfloat *v;
+	unsigned int *vtxcnt, nvtx = 0;
+	pixman_box32_t *rects;
+	int i, nrects;
+
+	rects = pixman_region32_rectangles(region, &nrects);
+
+	v = wl_array_add(&ec->vertices, nrects * 4 * 4 * sizeof *v);
+	vtxcnt = wl_array_add(&ec->vtxcnt, nrects * sizeof *vtxcnt);
+
+	for (i = 0; i < nrects; i++) {
+		pixman_box32_t *rect = &rects[i];
+
+		output_emit_vertex(output, &v, rect->x1, rect->y1);
+		output_emit_vertex(output, &v, rect->x2, rect->y1);
+		output_emit_vertex(output, &v, rect->x2, rect->y2);
+		output_emit_vertex(output, &v, rect->x1, rect->y2);
+
+		vtxcnt[nvtx++] = 4;
+	}
+
+	repaint_region(ec, NULL, nvtx);
+}
+
+static void
+create_indirect_texture(struct weston_output *output)
+{
+	struct gl_output_state *go = get_output_state(output);
+	GLenum status;
+
+	glGenTextures(1, &go->indirect_texture);
+
+	glBindTexture(GL_TEXTURE_2D, go->indirect_texture);
+
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+
+	glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA,
+		output->current->width,
+		output->current->height, 0, GL_RGBA, GL_UNSIGNED_BYTE, 0);
+	glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0,
+		GL_TEXTURE_2D, go->indirect_texture, 0);
+
+	status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+
+	if (status != GL_FRAMEBUFFER_COMPLETE) {
+		weston_log("unable to create framebuffer for indirect rendering %d\n", (int)status);
+		go->indirect_drawing = 0;
+		go->indirect_disable = 1;
+		glBindFramebuffer(GL_FRAMEBUFFER, 0);
+	}
+}
+
+static void
+repaint_surfaces_start(struct weston_output *output, pixman_region32_t *damage)
+{
+	struct gl_output_state *go = get_output_state(output);
+
+	go->indirect_drawing = 0 && !go->indirect_disable;
+
+	if (go->indirect_drawing) {
+		glBindFramebuffer(GL_FRAMEBUFFER, go->indirect_fbo);
+
+		if (!go->indirect_texture)
+			create_indirect_texture(output);
+	}
+}
+
+static void
+repaint_surfaces_finish(struct weston_output *output, pixman_region32_t *damage)
+{
+	struct gl_output_state *go = get_output_state(output);
+	struct gl_renderer *gr = get_renderer(output->compositor);
+	struct gl_shader *shader;
+
+	if (go->indirect_drawing) {
+		glBindFramebuffer(GL_FRAMEBUFFER, 0);
+
+		shader = gl_select_shader(gr, INPUT_RGBX, OUTPUT_BLEND);
+
+		gl_use_shader(gr, shader);
+		gl_shader_set_output(shader, output);
+		glUniform1f(shader->alpha_uniform, 1.0);
+
+		glDisable(GL_BLEND);
+
+		glActiveTexture(GL_TEXTURE0);
+		glBindTexture(GL_TEXTURE_2D, go->indirect_texture);
+
+		repaint_output(output, damage);
+	}
 }
 
 static void
@@ -669,13 +796,13 @@ draw_surface(struct weston_surface *es, struct weston_output *output,
 		else
 			glDisable(GL_BLEND);
 
-		repaint_region(es, &repaint, &es->opaque);
+		repaint_surface(es, &repaint, &es->opaque);
 	}
 
 	if (pixman_region32_not_empty(&surface_blend)) {
 		gl_use_shader(gr, shader);
 		glEnable(GL_BLEND);
-		repaint_region(es, &repaint, &surface_blend);
+		repaint_surface(es, &repaint, &surface_blend);
 	}
 
 	pixman_region32_fini(&surface_blend);
@@ -690,9 +817,13 @@ repaint_surfaces(struct weston_output *output, pixman_region32_t *damage)
 	struct weston_compositor *compositor = output->compositor;
 	struct weston_surface *surface;
 
+	repaint_surfaces_start(output, damage);
+
 	wl_list_for_each_reverse(surface, &compositor->surface_list, link)
 		if (surface->plane == &compositor->primary_plane)
 			draw_surface(surface, output, damage);
+
+	repaint_surfaces_finish(output, damage);
 }
 
 
@@ -1271,6 +1402,8 @@ gl_renderer_output_create(struct weston_output *output,
 			return -1;
 		}
 
+	glGenFramebuffers(1, &go->indirect_fbo);
+
 	output->renderer_state = go;
 
 	output_apply_border(output, gr);
@@ -1283,6 +1416,9 @@ gl_renderer_output_destroy(struct weston_output *output)
 {
 	struct gl_renderer *gr = get_renderer(output->compositor);
 	struct gl_output_state *go = get_output_state(output);
+
+	glDeleteTextures(1, &go->indirect_texture);
+	glDeleteFramebuffers(1, &go->indirect_fbo);
 
 	eglDestroySurface(gr->egl_display, go->egl_surface);
 
