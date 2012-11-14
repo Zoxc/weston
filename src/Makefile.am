@@ -34,6 +34,8 @@ weston_SOURCES =				\
 	util.c					\
 	matrix.c				\
 	matrix.h				\
+	gl-shaders.c				\
+	gl-internal.h				\
 	gl-renderer.h				\
 	gl-renderer.c				\
 	noop-renderer.c				\
