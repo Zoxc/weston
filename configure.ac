@@ -34,7 +34,18 @@ AC_CHECK_HEADERS([execinfo.h])
 AC_CHECK_FUNCS([mkostemp strchrnul])
 
 PKG_CHECK_MODULES(COMPOSITOR,
-		  [wayland-server egl >= 7.10 glesv2 xkbcommon pixman-1])
+		  [wayland-server egl >= 7.10 xkbcommon pixman-1])
+
+
+AC_ARG_ENABLE(opengl, [  --enable-opengl],,
+		  enable_opengl=no)
+AM_CONDITIONAL(ENABLE_OPENGL, test x$enable_opengl = xyes)
+if test x$enable_opengl = xyes; then
+  PKG_CHECK_MODULES([OPENGL], gl)
+  AC_DEFINE([BUILD_OPENGL], [1], [Build using desktop OpenGL])
+else
+  PKG_CHECK_MODULES([OPENGL], glesv2)
+fi
 
 
 AC_ARG_ENABLE(setuid-install, [  --enable-setuid-install],,

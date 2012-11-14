@@ -24,6 +24,7 @@
 #ifndef _WAYLAND_SYSTEM_COMPOSITOR_H_
 #define _WAYLAND_SYSTEM_COMPOSITOR_H_
 
+#include <config.h>
 #include <pixman.h>
 #include <xkbcommon/xkbcommon.h>
 #include <wayland-server.h>

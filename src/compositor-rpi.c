@@ -1457,7 +1457,7 @@ rpi_compositor_create(struct wl_display *display, int argc, char *argv[],
 		EGL_GREEN_SIZE, 1,
 		EGL_BLUE_SIZE, 1,
 		EGL_ALPHA_SIZE, 0,
-		EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+		EGL_RENDERABLE_TYPE, GL_EGL_OPENGL_BIT,
 		EGL_NONE
 	};
 

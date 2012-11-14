@@ -22,6 +22,26 @@
 
 #include  "compositor.h"
 
+#ifdef BUILD_OPENGL
+
+#define OPENGL_ES_VER 0
+#define GL_GLEXT_PROTOTYPES
+#define GL_EGL_OPENGL_BIT EGL_OPENGL_BIT
+
+#include <GL/gl.h>
+#include <GL/glext.h>
+#include <GLES2/gl2platform.h>
+
+#else
+
+#define OPENGL_ES
+#define OPENGL_ES_VER 2
+#define GL_EGL_OPENGL_BIT EGL_OPENGL_ES2_BIT
+#include <GLES2/gl2.h>
+
+#endif
+
+#include <GLES2/gl2ext.h>
 #include <EGL/egl.h>
 
 extern const EGLint gl_renderer_opaque_attribs[];

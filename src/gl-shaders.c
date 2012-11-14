@@ -423,8 +423,9 @@ create_shader_permutation(struct gl_renderer *renderer,
 
 	shader_builder_init(&sb);
 
-	append(&sb.global, "precision mediump float;\n" \
-		"varying vec2 texture_coord;\n" \
+	if (OPENGL_ES_VER)
+		append(&sb.global, "precision mediump float;\n");
+	append(&sb.global, "varying vec2 texture_coord;\n" \
 		"uniform float alpha;\n");
 
 	append(&sb.body, "void main()\n{\n");

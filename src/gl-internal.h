@@ -24,9 +24,6 @@
 #ifndef _GL_INTERNAL_H_
 #define _GL_INTERNAL_H_
 
-#include <GLES2/gl2.h>
-#include <GLES2/gl2ext.h>
-
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
@@ -105,6 +102,10 @@ struct gl_renderer {
 		GLuint texture;
 		int32_t width, height;
 	} border;
+
+	GLenum bgra_internal_format, bgra_format;
+	GLenum rgba16_internal_format;
+	GLenum short_type;
 
 	PFNGLEGLIMAGETARGETTEXTURE2DOESPROC image_target_texture_2d;
 	PFNEGLCREATEIMAGEKHRPROC create_image;
