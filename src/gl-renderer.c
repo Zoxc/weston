@@ -1124,6 +1124,24 @@ ensure_textures(struct gl_surface_state *gs, int num_textures)
 }
 
 static void
+destroy_images(struct gl_renderer *gr, struct gl_surface_state *gs)
+{
+	int i;
+
+	for (i = 0; i < gs->num_images; i++)
+		gr->destroy_image(gr->egl_display, gs->images[i]);
+
+	gs->num_images = 0;
+}
+
+static void
+destroy_textures(struct gl_surface_state *gs)
+{
+	glDeleteTextures(gs->num_textures, gs->textures);
+	gs->num_textures = 0;
+}
+
+static void
 gl_renderer_attach(struct weston_surface *es, struct wl_buffer *buffer)
 {
 	struct weston_compositor *ec = es->compositor;
@@ -1132,14 +1150,10 @@ gl_renderer_attach(struct weston_surface *es, struct wl_buffer *buffer)
 	EGLint attribs[3], format;
 	int i, num_planes;
 
+	destroy_images(gr, gs);
+
 	if (!buffer) {
-		for (i = 0; i < gs->num_images; i++) {
-			gr->destroy_image(gr->egl_display, gs->images[i]);
-			gs->images[i] = NULL;
-		}
-		gs->num_images = 0;
-		glDeleteTextures(gs->num_textures, gs->textures);
-		gs->num_textures = 0;
+		destroy_textures(gs);
 		return;
 	}
 
@@ -1158,8 +1172,6 @@ gl_renderer_attach(struct weston_surface *es, struct wl_buffer *buffer)
 			gs->input = INPUT_RGBA;
 	} else if (gr->query_buffer(gr->egl_display, buffer,
 				    EGL_TEXTURE_FORMAT, &format)) {
-		for (i = 0; i < gs->num_images; i++)
-			gr->destroy_image(gr->egl_display, gs->images[i]);
 		gs->num_images = 0;
 		gs->target = GL_TEXTURE_2D;
 		switch (format) {
@@ -1203,10 +1215,11 @@ gl_renderer_attach(struct weston_surface *es, struct wl_buffer *buffer)
 							 EGL_WAYLAND_BUFFER_WL,
 							 buffer, attribs);
 			if (!gs->images[i]) {
+				gs->num_images = i;
+				destroy_images(gr, gs);
 				weston_log("failed to create img for plane %d\n", i);
-				continue;
+				return;
 			}
-			gs->num_images++;
 
 			glActiveTexture(GL_TEXTURE0 + i);
 			glBindTexture(gs->target, gs->textures[i]);
@@ -1214,6 +1227,7 @@ gl_renderer_attach(struct weston_surface *es, struct wl_buffer *buffer)
 						    gs->images[i]);
 		}
 
+		gs->num_images = num_planes;
 		es->pitch = buffer->width;
 	} else {
 		weston_log("unhandled buffer type!\n");
@@ -1260,12 +1274,9 @@ gl_renderer_destroy_surface(struct weston_surface *surface)
 {
 	struct gl_surface_state *gs = get_surface_state(surface);
 	struct gl_renderer *gr = get_renderer(surface->compositor);
-	int i;
 
-	glDeleteTextures(gs->num_textures, gs->textures);
-
-	for (i = 0; i < gs->num_images; i++)
-		gr->destroy_image(gr->egl_display, gs->images[i]);
+	destroy_textures(gs);
+	destroy_images(gr, gs);
 
 	free(gs);
 }
