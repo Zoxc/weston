@@ -520,8 +520,8 @@ triangle_fan_debug(struct weston_surface *surface, int first, int count)
 		*index++ = first + i;
 	}
 
-	glUseProgram(gr->solid_shader.program);
-	glUniform4fv(gr->solid_shader.color_uniform, 1,
+	glUseProgram(gr->solid_shader->program);
+	glUniform4fv(gr->solid_shader->color_uniform, 1,
 			color[color_idx++ % ARRAY_LENGTH(color)]);
 	glDrawElements(GL_LINES, nelems, GL_UNSIGNED_SHORT, buffer);
 	glUseProgram(gr->current_shader->program);
@@ -602,6 +602,7 @@ draw_surface(struct weston_surface *es, struct weston_output *output,
 	struct weston_compositor *ec = es->compositor;
 	struct gl_renderer *gr = get_renderer(ec);
 	struct gl_surface_state *gs = get_surface_state(es);
+	struct gl_shader *shader;
 	/* repaint bounding region in global coordinates: */
 	pixman_region32_t repaint;
 	/* non-opaque region in surface coordinates: */
@@ -624,12 +625,14 @@ draw_surface(struct weston_surface *es, struct weston_output *output,
 	glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
 
 	if (ec->fan_debug) {
-		gl_use_shader(gr, &gr->solid_shader);
-		gl_shader_uniforms(&gr->solid_shader, es, output);
+		gl_use_shader(gr, gr->solid_shader);
+		gl_shader_setup(gr->solid_shader, es, output);
 	}
 
-	gl_use_shader(gr, gs->shader);
-	gl_shader_uniforms(gs->shader, es, output);
+	shader = gl_select_shader(gr, gs->input, OUTPUT_BLEND);
+
+	gl_use_shader(gr, shader);
+	gl_shader_setup(shader, es, output);
 
 	if (es->transform.enabled || output->zoom.active)
 		filter = GL_LINEAR;
@@ -649,14 +652,16 @@ draw_surface(struct weston_surface *es, struct weston_output *output,
 	pixman_region32_subtract(&surface_blend, &surface_blend, &es->opaque);
 
 	if (pixman_region32_not_empty(&es->opaque)) {
-		if (gs->shader == &gr->texture_shader_rgba) {
+		if (gs->input == INPUT_RGBA) {
 			/* Special case for RGBA textures with possibly
 			 * bad data in alpha channel: use the shader
 			 * that forces texture alpha = 1.0.
 			 * Xwayland surfaces need this.
 			 */
-			gl_use_shader(gr, &gr->texture_shader_rgbx);
-			gl_shader_uniforms(&gr->texture_shader_rgbx, es, output);
+
+			struct gl_shader *rgbx_shader = gl_select_shader(gr, INPUT_RGBX, OUTPUT_BLEND);
+			gl_use_shader(gr, rgbx_shader);
+			gl_shader_setup(rgbx_shader, es, output);
 		}
 
 		if (es->alpha < 1.0)
@@ -668,7 +673,7 @@ draw_surface(struct weston_surface *es, struct weston_output *output,
 	}
 
 	if (pixman_region32_not_empty(&surface_blend)) {
-		gl_use_shader(gr, gs->shader);
+		gl_use_shader(gr, shader);
 		glEnable(GL_BLEND);
 		repaint_region(es, &repaint, &surface_blend);
 	}
@@ -772,17 +777,17 @@ draw_border(struct weston_output *output)
 {
 	struct weston_compositor *ec = output->compositor;
 	struct gl_renderer *gr = get_renderer(ec);
-	struct gl_shader *shader = &gr->texture_shader_rgba;
+	struct gl_shader *shader;
 	GLfloat *v;
 	int n;
+
+	shader = gl_select_shader(gr, INPUT_RGBA, OUTPUT_BLEND);
 
 	glDisable(GL_BLEND);
 	gl_use_shader(gr, shader);
 
-	glUniformMatrix4fv(shader->proj_uniform,
-			   1, GL_FALSE, output->matrix.d);
+	gl_shader_set_output(shader, output);
 
-	glUniform1i(shader->tex_uniforms[0], 0);
 	glUniform1f(shader->alpha_uniform, 1);
 
 	n = texture_border(output);
@@ -1002,9 +1007,9 @@ gl_renderer_attach(struct weston_surface *es, struct wl_buffer *buffer)
 			     es->pitch, buffer->height, 0,
 			     GL_BGRA_EXT, GL_UNSIGNED_BYTE, NULL);
 		if (wl_shm_buffer_get_format(buffer) == WL_SHM_FORMAT_XRGB8888)
-			gs->shader = &gr->texture_shader_rgbx;
+			gs->input = INPUT_RGBX;
 		else
-			gs->shader = &gr->texture_shader_rgba;
+			gs->input = INPUT_RGBA;
 	} else if (gr->query_buffer(gr->egl_display, buffer,
 				    EGL_TEXTURE_FORMAT, &format)) {
 		for (i = 0; i < gs->num_images; i++)
@@ -1013,29 +1018,34 @@ gl_renderer_attach(struct weston_surface *es, struct wl_buffer *buffer)
 		gs->target = GL_TEXTURE_2D;
 		switch (format) {
 		case EGL_TEXTURE_RGB:
-		case EGL_TEXTURE_RGBA:
 		default:
 			num_planes = 1;
-			gs->shader = &gr->texture_shader_rgba;
+			gs->input = INPUT_RGBX;
+			break;
+		case EGL_TEXTURE_RGBA:
+			num_planes = 1;
+			gs->input = INPUT_RGBA;
 			break;
 		case EGL_TEXTURE_EXTERNAL_WL:
 			num_planes = 1;
 			gs->target = GL_TEXTURE_EXTERNAL_OES;
-			gs->shader = &gr->texture_shader_egl_external;
+			gs->input = INPUT_EGL_EXTERNAL;
 			break;
 		case EGL_TEXTURE_Y_UV_WL:
 			num_planes = 2;
-			gs->shader = &gr->texture_shader_y_uv;
+			gs->input = INPUT_Y_UV;
 			break;
 		case EGL_TEXTURE_Y_U_V_WL:
 			num_planes = 3;
-			gs->shader = &gr->texture_shader_y_u_v;
+			gs->input = INPUT_Y_U_V;
 			break;
 		case EGL_TEXTURE_Y_XUXV_WL:
 			num_planes = 2;
-			gs->shader = &gr->texture_shader_y_xuxv;
+			gs->input = INPUT_Y_XUXV;
 			break;
 		}
+
+		assert(num_planes <= MAX_PLANES);
 
 		ensure_textures(gs, num_planes);
 		for (i = 0; i < num_planes; i++) {
@@ -1069,14 +1079,13 @@ gl_renderer_surface_set_color(struct weston_surface *surface,
 		 float red, float green, float blue, float alpha)
 {
 	struct gl_surface_state *gs = get_surface_state(surface);
-	struct gl_renderer *gr = get_renderer(surface->compositor);
 
 	gs->color[0] = red;
 	gs->color[1] = green;
 	gs->color[2] = blue;
 	gs->color[3] = alpha;
 
-	gs->shader = &gr->solid_shader;
+	gs->input = INPUT_SOLID;
 }
 
 static int
@@ -1293,6 +1302,8 @@ gl_renderer_destroy(struct weston_compositor *ec)
 	if (gr->has_bind_display)
 		gr->unbind_display(gr->egl_display, ec->wl_display);
 
+	gl_destroy_shaders(gr);
+
 	/* Work around crash in egl_dri2.c's dri2_make_current() - when does this apply? */
 	eglMakeCurrent(gr->egl_display,
 		       EGL_NO_SURFACE, EGL_NO_SURFACE,
@@ -1300,6 +1311,9 @@ gl_renderer_destroy(struct weston_compositor *ec)
 
 	eglTerminate(gr->egl_display);
 	eglReleaseThread();
+
+	free(ec->renderer);
+	ec->renderer = NULL;
 }
 
 static int
@@ -1424,15 +1438,11 @@ fragment_debug_binding(struct wl_seat *seat, uint32_t time, uint32_t key,
 {
 	struct weston_compositor *ec = data;
 	struct gl_renderer *gr = get_renderer(ec);
-	struct weston_output *output;
 
 	gr->fragment_shader_debug ^= 1;
 
-	gl_destroy_shaders(gr);
 	gl_init_shaders(gr);
-
-	wl_list_for_each(output, &ec->output_list, link)
-		weston_output_damage(output);
+	weston_compositor_damage_all(ec);
 }
 
 static int

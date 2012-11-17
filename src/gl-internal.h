@@ -39,13 +39,41 @@
 #include <EGL/eglext.h>
 #include "weston-egl-ext.h"
 
+#define MAX_PLANES 3
+
+enum gl_shader_attribute {
+	ATTRIBUTE_INPUT,
+	ATTRIBUTE_OUTPUT,
+	ATTRIBUTE_CONVERSION,
+	ATTRIBUTE_COUNT
+};
+
+enum gl_conversion_attribute {
+	CONVERSION_NONE,
+	CONVERSION_COUNT
+};
+
+enum gl_output_attribute {
+	OUTPUT_BLEND,
+	OUTPUT_COUNT
+};
+
+enum gl_input_attribute {
+	INPUT_RGBX,
+	INPUT_RGBA,
+	INPUT_EGL_EXTERNAL,
+	INPUT_Y_UV,
+	INPUT_Y_U_V,
+	INPUT_Y_XUXV,
+	INPUT_SOLID,
+	INPUT_COUNT
+};
+
 struct gl_shader {
 	GLuint program;
-	GLuint vertex_shader, fragment_shader;
-	GLint proj_uniform;
-	GLint tex_uniforms[3];
-	GLint alpha_uniform;
+	GLint projection_uniform;
 	GLint color_uniform;
+	GLint alpha_uniform;
 };
 
 struct gl_output_state {
@@ -54,12 +82,12 @@ struct gl_output_state {
 
 struct gl_surface_state {
 	GLfloat color[4];
-	struct gl_shader *shader;
+	enum gl_input_attribute input;
 
-	GLuint textures[3];
+	GLuint textures[MAX_PLANES];
 	int num_textures;
 
-	EGLImageKHR images[3];
+	EGLImageKHR images[MAX_PLANES];
 	GLenum target;
 	int num_images;
 };
@@ -91,15 +119,11 @@ struct gl_renderer {
 
 	int has_egl_image_external;
 
-	struct gl_shader texture_shader_rgba;
-	struct gl_shader texture_shader_rgbx;
-	struct gl_shader texture_shader_egl_external;
-	struct gl_shader texture_shader_y_uv;
-	struct gl_shader texture_shader_y_u_v;
-	struct gl_shader texture_shader_y_xuxv;
-	struct gl_shader invert_color_shader;
-	struct gl_shader solid_shader;
+	struct gl_shader *solid_shader;
 	struct gl_shader *current_shader;
+
+	struct gl_shader **shaders;
+	size_t shader_count;
 };
 
 static inline struct gl_output_state *
@@ -127,11 +151,20 @@ void
 gl_destroy_shaders(struct gl_renderer *gr);
 
 void
+gl_shader_set_output(struct gl_shader *shader,
+		     struct weston_output *output);
+
+void
 gl_use_shader(struct gl_renderer *gr,
 			     struct gl_shader *shader);
 
+struct gl_shader *
+gl_select_shader(struct gl_renderer *gr,
+			enum gl_input_attribute input,
+			enum gl_output_attribute output);
+
 void
-gl_shader_uniforms(struct gl_shader *shader,
+gl_shader_setup(struct gl_shader *shader,
 		       struct weston_surface *surface,
 		       struct weston_output *output);
 
