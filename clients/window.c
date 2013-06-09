@@ -518,6 +518,7 @@ struct egl_window_surface {
 	struct wl_surface *surface;
 	struct wl_egl_window *egl_window;
 	EGLSurface egl_surface;
+	int dx, dy;
 };
 
 static struct egl_window_surface *
@@ -533,9 +534,12 @@ egl_window_surface_prepare(struct toysurface *base, int dx, int dy,
 {
 	struct egl_window_surface *surface = to_egl_window_surface(base);
 
+	surface->dx = dx;
+	surface->dy = dy;
+
 	surface_to_buffer_size (buffer_transform, buffer_scale, &width, &height);
 
-	wl_egl_window_resize(surface->egl_window, width, height, dx, dy);
+	wl_egl_window_resize(surface->egl_window, width, height, 0, 0);
 	cairo_gl_surface_set_size(surface->cairo_surface, width, height);
 
 	return cairo_surface_reference(surface->cairo_surface);
@@ -547,8 +551,11 @@ egl_window_surface_swap(struct toysurface *base,
 			struct rectangle *server_allocation)
 {
 	struct egl_window_surface *surface = to_egl_window_surface(base);
+	struct wl_buffer *buffer;
 
-	cairo_gl_surface_swapbuffers(surface->cairo_surface);
+	cairo_device_acquire(surface->display->argb_device);
+	cairo_device_flush(surface->display->argb_device);
+
 	wl_egl_window_get_attached_size(surface->egl_window,
 					&server_allocation->width,
 					&server_allocation->height);
@@ -556,6 +563,17 @@ egl_window_surface_swap(struct toysurface *base,
 	buffer_to_surface_size (buffer_transform, buffer_scale,
 				&server_allocation->width,
 				&server_allocation->height);
+
+	buffer = wl_egl_window_take_buffer(surface->egl_window);
+
+	cairo_device_release(surface->display->argb_device);
+
+	wl_surface_attach(surface->surface, buffer,
+			  surface->dx, surface->dy);
+	wl_surface_damage(surface->surface, 0, 0,
+			  server_allocation->width, server_allocation->height);
+	wl_surface_commit(surface->surface);
+
 }
 
 static int
