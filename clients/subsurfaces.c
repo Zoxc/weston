@@ -245,31 +245,6 @@ egl_state_destroy(struct egl_state *egl)
 	free(egl);
 }
 
-static void
-egl_make_swapbuffers_nonblock(struct egl_state *egl)
-{
-	EGLint a = EGL_MIN_SWAP_INTERVAL;
-	EGLint b = EGL_MAX_SWAP_INTERVAL;
-
-	if (!eglGetConfigAttrib(egl->dpy, egl->conf, a, &a) ||
-	    !eglGetConfigAttrib(egl->dpy, egl->conf, b, &b)) {
-		fprintf(stderr, "warning: swap interval range unknown\n");
-	} else
-	if (a > 0) {
-		fprintf(stderr, "warning: minimum swap interval is %d, "
-			"while 0 is required to not deadlock on resize.\n", a);
-	}
-
-	/*
-	 * We rely on the Wayland compositor to sync to vblank anyway.
-	 * We just need to be able to call eglSwapBuffers() without the
-	 * risk of waiting for a frame callback in it.
-	 */
-	if (!eglSwapInterval(egl->dpy, 0)) {
-		fprintf(stderr, "error: eglSwapInterval() failed.\n");
-	}
-}
-
 static GLuint
 create_shader(const char *source, GLenum shader_type)
 {
@@ -390,6 +365,7 @@ triangle_frame_callback(void *data, struct wl_callback *callback,
 			uint32_t time)
 {
 	struct triangle *tri = data;
+	struct wl_buffer *buffer;
 
 	DBG("%stime %u\n", callback ? "" : "artificial ", time);
 	assert(callback == tri->frame_cb);
@@ -405,7 +381,11 @@ triangle_frame_callback(void *data, struct wl_callback *callback,
 	tri->frame_cb = wl_surface_frame(tri->wl_surface);
 	wl_callback_add_listener(tri->frame_cb, &triangle_frame_listener, tri);
 
-	eglSwapBuffers(tri->egl->dpy, tri->egl_surface);
+	buffer = wl_egl_window_take_buffer(tri->egl_window);
+
+	wl_surface_attach(surface->surface, buffer, 0, 0);
+	wl_surface_damage(tri->egl_surface, 0, 0, tri->width, tri->height);
+	wl_surface_commit(tri->egl_surface);
 }
 
 static void
@@ -423,7 +403,6 @@ triangle_create_egl_surface(struct triangle *tri, int width, int height)
 			     tri->egl_surface, tri->egl->ctx);
 	assert(ret == EGL_TRUE);
 
-	egl_make_swapbuffers_nonblock(tri->egl);
 	triangle_init_gl(&tri->gl);
 }
 
