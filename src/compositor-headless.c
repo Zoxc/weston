@@ -110,7 +110,7 @@ headless_compositor_create_output(struct headless_compositor *c,
 
 	output->base.current = &output->mode;
 	weston_output_init(&output->base, &c->base, 0, 0, width, height,
-			   WL_OUTPUT_TRANSFORM_NORMAL, 1);
+			   WL_OUTPUT_TRANSFORM_NORMAL, wl_fixed_from_int(1));
 
 	output->base.make = "weston";
 	output->base.model = "headless";

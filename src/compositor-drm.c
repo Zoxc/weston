@@ -776,9 +776,6 @@ drm_output_prepare_overlay_surface(struct weston_output *output_base,
 	if (es->buffer_transform != output_base->transform)
 		return NULL;
 
-	if (es->buffer_scale != output_base->scale)
-		return NULL;
-
 	if (c->sprites_are_broken)
 		return NULL;
 
@@ -847,7 +844,6 @@ drm_output_prepare_overlay_surface(struct weston_output *output_base,
 	tbox = weston_transformed_rect(output_base->width,
 				       output_base->height,
 				       output_base->transform,
-				       output_base->scale,
 				       *box);
 	s->dest_x = tbox.x1;
 	s->dest_y = tbox.y1;
@@ -885,7 +881,7 @@ drm_output_prepare_overlay_surface(struct weston_output *output_base,
 
 	tbox = weston_transformed_rect(wl_fixed_from_int(es->geometry.width),
 				       wl_fixed_from_int(es->geometry.height),
-				       es->buffer_transform, es->buffer_scale, tbox);
+				       es->buffer_transform, tbox);
 
 	s->src_x = tbox.x1 << 8;
 	s->src_y = tbox.y1 << 8;
@@ -966,8 +962,8 @@ drm_output_set_cursor(struct drm_output *output)
 		}
 	}
 
-	x = (es->geometry.x - output->base.x) * output->base.scale;
-	y = (es->geometry.y - output->base.y) * output->base.scale;
+	x = es->geometry.x - output->base.x;
+	y = es->geometry.y - output->base.y;
 	if (output->cursor_plane.x != x || output->cursor_plane.y != y) {
 		if (drmModeMoveCursor(c->drm.fd, output->crtc_id, x, y)) {
 			weston_log("failed to move cursor: %m\n");

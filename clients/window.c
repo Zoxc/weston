@@ -1458,8 +1458,8 @@ window_set_buffer_scale(struct window *window,
 			int32_t scale)
 {
 	window->main_surface->buffer_scale = scale;
-	wl_surface_set_buffer_scale(window->main_surface->surface,
-				    scale);
+	wl_surface_set_scaling_factor(window->main_surface->surface,
+				   wl_fixed_from_int(scale));
 }
 
 uint32_t

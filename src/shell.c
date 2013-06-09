@@ -1501,10 +1501,10 @@ static void
 restore_output_mode(struct weston_output *output)
 {
 	if (output->current != output->origin ||
-	    (int32_t)output->scale != output->origin_scale)
+	    (int32_t)output->scaling_factor != output->origin_scaling_factor)
 		weston_output_switch_mode(output,
 					  output->origin,
-					  output->origin_scale);
+					  output->origin_scaling_factor);
 }
 
 static void
@@ -1820,11 +1820,11 @@ shell_configure_fullscreen(struct shell_surface *shsurf)
 	case WL_SHELL_SURFACE_FULLSCREEN_METHOD_DRIVER:
 		if (shell_surface_is_top_fullscreen(shsurf)) {
 			struct weston_mode mode = {0,
-				surf_width * surface->buffer_scale,
-				surf_height * surface->buffer_scale,
+				surf_width,
+				surf_height,
 				shsurf->fullscreen.framerate};
 
-			if (weston_output_switch_mode(output, &mode, surface->buffer_scale) == 0) {
+			if (weston_output_switch_mode(output, &mode, surface->scaling_factor) == 0) {
 				weston_surface_set_position(surface,
 							    output->x - surf_x,
 							    output->y - surf_y);

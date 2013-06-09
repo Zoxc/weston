@@ -782,7 +782,7 @@ draw_surface(struct weston_surface *es, struct weston_output *output,
 	use_shader(gr, gs->shader);
 	shader_uniforms(gs->shader, es, output);
 
-	if (es->transform.enabled || output->zoom.active || output->scale != es->buffer_scale)
+	if (es->transform.enabled || output->zoom.active)
 		filter = GL_LINEAR;
 	else
 		filter = GL_NEAREST;
@@ -1223,8 +1223,8 @@ gl_renderer_attach(struct weston_surface *es, struct wl_buffer *buffer)
 			pixman_region32_union_rect(&gs->texture_damage,
 						   &gs->texture_damage,
 						   0, 0,
-						   gs->pitch / es->buffer_scale,
-						   gs->height / es->buffer_scale);
+						   gs->pitch,
+						   gs->height);
 		}
 
 		if (wl_shm_buffer_get_format(buffer) == WL_SHM_FORMAT_XRGB8888)

@@ -380,7 +380,7 @@ rpi_output_create(struct rpi_compositor *compositor, uint32_t transform)
 
 	weston_output_init(&output->base, &compositor->base,
 			   0, 0, round(mm_width), round(mm_height),
-			   transform, 1);
+			   transform, wl_fixed_from_int(1));
 
 	if (rpi_renderer_output_create(&output->base, output->display) < 0)
 		goto out_output;

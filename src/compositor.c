@@ -90,11 +90,11 @@ sigchld_handler(int signal_number, void *data)
 }
 
 static void
-weston_output_transform_scale_init(struct weston_output *output,
-				   uint32_t transform, uint32_t scale);
+weston_output_transform_init(struct weston_output *output,
+				   uint32_t transform);
 
 WL_EXPORT int
-weston_output_switch_mode(struct weston_output *output, struct weston_mode *mode, int32_t scale)
+weston_output_switch_mode(struct weston_output *output, struct weston_mode *mode, wl_fixed_t scaling_factor)
 {
 	struct weston_seat *seat;
 	pixman_region32_t old_output_region;
@@ -107,13 +107,13 @@ weston_output_switch_mode(struct weston_output *output, struct weston_mode *mode
 	if (ret < 0)
 		return ret;
 
-        output->scale = scale;
+        output->scaling_factor = scaling_factor;
 
 	pixman_region32_init(&old_output_region);
 	pixman_region32_copy(&old_output_region, &output->region);
 
 	/* Update output region and transformation matrix */
-	weston_output_transform_scale_init(output, output->transform, output->scale);
+	weston_output_transform_init(output, output->transform);
 
 	pixman_region32_init(&output->previous_damage);
 	pixman_region32_init_rect(&output->region, output->x, output->y,
@@ -292,9 +292,9 @@ weston_surface_create(struct weston_compositor *compositor)
 	}
 
 	surface->buffer_transform = WL_OUTPUT_TRANSFORM_NORMAL;
-	surface->buffer_scale = 1;
+	surface->scaling_factor = wl_fixed_from_int(1);
 	surface->pending.buffer_transform = surface->buffer_transform;
-	surface->pending.buffer_scale = surface->buffer_scale;
+	surface->pending.scaling_factor = surface->scaling_factor;
 	surface->output = NULL;
 	surface->plane = &compositor->primary_plane;
 	surface->pending.newly_attached = 0;
@@ -363,7 +363,6 @@ weston_surface_to_global_float(struct weston_surface *surface,
 WL_EXPORT void
 weston_transformed_coord(int width, int height,
 			 enum wl_output_transform transform,
-			 int32_t scale,
 			 float sx, float sy, float *bx, float *by)
 {
 	switch (transform) {
@@ -401,24 +400,20 @@ weston_transformed_coord(int width, int height,
 		*by = sx;
 		break;
 	}
-
-	*bx *= scale;
-	*by *= scale;
 }
 
 WL_EXPORT pixman_box32_t
 weston_transformed_rect(int width, int height,
 			enum wl_output_transform transform,
-			int32_t scale,
 			pixman_box32_t rect)
 {
 	float x1, x2, y1, y2;
 
 	pixman_box32_t ret;
 
-	weston_transformed_coord(width, height, transform, scale,
+	weston_transformed_coord(width, height, transform,
 				 rect.x1, rect.y1, &x1, &y1);
-	weston_transformed_coord(width, height, transform, scale,
+	weston_transformed_coord(width, height, transform,
 				 rect.x2, rect.y2, &x2, &y2);
 
 	if (x1 <= x2) {
@@ -447,23 +442,7 @@ weston_surface_to_buffer_float(struct weston_surface *surface,
 	weston_transformed_coord(surface->geometry.width,
 				 surface->geometry.height,
 				 surface->buffer_transform,
-				 surface->buffer_scale,
 				 sx, sy, bx, by);
-}
-
-WL_EXPORT void
-weston_surface_to_buffer(struct weston_surface *surface,
-			 int sx, int sy, int *bx, int *by)
-{
-	float bxf, byf;
-
-	weston_transformed_coord(surface->geometry.width,
-				 surface->geometry.height,
-				 surface->buffer_transform,
-				 surface->buffer_scale,
-				 sx, sy, &bxf, &byf);
-	*bx = floorf(bxf);
-	*by = floorf(byf);
 }
 
 WL_EXPORT pixman_box32_t
@@ -473,7 +452,6 @@ weston_surface_to_buffer_rect(struct weston_surface *surface,
 	return weston_transformed_rect(surface->geometry.width,
 				       surface->geometry.height,
 				       surface->buffer_transform,
-				       surface->buffer_scale,
 				       rect);
 }
 
@@ -903,37 +881,29 @@ weston_surface_is_mapped(struct weston_surface *surface)
 WL_EXPORT int32_t
 weston_surface_buffer_width(struct weston_surface *surface)
 {
-	int32_t width;
 	switch (surface->buffer_transform) {
 	case WL_OUTPUT_TRANSFORM_90:
 	case WL_OUTPUT_TRANSFORM_270:
 	case WL_OUTPUT_TRANSFORM_FLIPPED_90:
 	case WL_OUTPUT_TRANSFORM_FLIPPED_270:
-		width = surface->buffer_ref.buffer->height;
-                break;
+		return surface->buffer_ref.buffer->height;
 	default:
-		width = surface->buffer_ref.buffer->width;
-                break;
+		return surface->buffer_ref.buffer->width;
 	}
-	return width / surface->buffer_scale;
 }
 
 WL_EXPORT int32_t
 weston_surface_buffer_height(struct weston_surface *surface)
 {
-	int32_t height;
 	switch (surface->buffer_transform) {
 	case WL_OUTPUT_TRANSFORM_90:
 	case WL_OUTPUT_TRANSFORM_270:
 	case WL_OUTPUT_TRANSFORM_FLIPPED_90:
 	case WL_OUTPUT_TRANSFORM_FLIPPED_270:
-		height = surface->buffer_ref.buffer->width;
-                break;
+		return surface->buffer_ref.buffer->width;
 	default:
-		height = surface->buffer_ref.buffer->height;
-                break;
+		return surface->buffer_ref.buffer->height;
 	}
-	return height / surface->buffer_scale;
 }
 
 WL_EXPORT uint32_t
@@ -1525,8 +1495,8 @@ weston_surface_commit(struct weston_surface *surface)
 	/* wl_surface.set_buffer_transform */
 	surface->buffer_transform = surface->pending.buffer_transform;
 
-	/* wl_surface.set_buffer_scale */
-	surface->buffer_scale = surface->pending.buffer_scale;
+	/* wl_surface.set_scaling_factor */
+	surface->scaling_factor = surface->pending.scaling_factor;
 
 	/* wl_surface.attach */
 	if (surface->pending.buffer || surface->pending.newly_attached)
@@ -1626,13 +1596,13 @@ surface_set_buffer_transform(struct wl_client *client,
 }
 
 static void
-surface_set_buffer_scale(struct wl_client *client,
+surface_set_scaling_factor(struct wl_client *client,
 			 struct wl_resource *resource,
-			 int32_t scale)
+			 wl_fixed_t scaling_factor)
 {
 	struct weston_surface *surface = resource->data;
 
-	surface->pending.buffer_scale = scale;
+	surface->pending.scaling_factor = scaling_factor;
 }
 
 static const struct wl_surface_interface surface_interface = {
@@ -1644,7 +1614,7 @@ static const struct wl_surface_interface surface_interface = {
 	surface_set_input_region,
 	surface_commit,
 	surface_set_buffer_transform,
-	surface_set_buffer_scale
+	surface_set_scaling_factor
 };
 
 static void
@@ -1756,8 +1726,8 @@ weston_subsurface_commit_from_cache(struct weston_subsurface *sub)
 	/* wl_surface.set_buffer_transform */
 	surface->buffer_transform = sub->cached.buffer_transform;
 
-	/* wl_surface.set_buffer_scale */
-	surface->buffer_scale = sub->cached.buffer_scale;
+	/* wl_surface.set_scaling_factor */
+	surface->scaling_factor = sub->cached.scaling_factor;
 
 	/* wl_surface.attach */
 	if (sub->cached.buffer_ref.buffer || sub->cached.newly_attached)
@@ -1848,7 +1818,7 @@ weston_subsurface_commit_to_cache(struct weston_subsurface *sub)
 	surface->pending.newly_attached = 0;
 
 	sub->cached.buffer_transform = surface->pending.buffer_transform;
-	sub->cached.buffer_scale = surface->pending.buffer_scale;
+	sub->cached.scaling_factor = surface->pending.scaling_factor;
 
 	pixman_region32_copy(&sub->cached.opaque, &surface->pending.opaque);
 
@@ -2520,7 +2490,7 @@ bind_output(struct wl_client *client,
 				output->transform);
 	if (version >= 2)
 		wl_output_send_scale(resource,
-				     output->scale);
+				     output->scaling_factor);
 
 	wl_list_for_each (mode, &output->mode_list, link) {
 		wl_output_send_mode(resource,
@@ -2641,7 +2611,7 @@ weston_output_update_matrix(struct weston_output *output)
 }
 
 static void
-weston_output_transform_scale_init(struct weston_output *output, uint32_t transform, uint32_t scale)
+weston_output_transform_init(struct weston_output *output, uint32_t transform)
 {
 	output->transform = transform;
 
@@ -2664,10 +2634,6 @@ weston_output_transform_scale_init(struct weston_output *output, uint32_t transf
 	default:
 		break;
 	}
-
-        output->scale = scale;
-	output->width /= scale;
-	output->height /= scale;
 }
 
 WL_EXPORT void
@@ -2685,7 +2651,7 @@ weston_output_move(struct weston_output *output, int x, int y)
 WL_EXPORT void
 weston_output_init(struct weston_output *output, struct weston_compositor *c,
 		   int x, int y, int mm_width, int mm_height, uint32_t transform,
-		   int32_t scale)
+		   wl_fixed_t scaling_factor)
 {
 	output->compositor = c;
 	output->x = x;
@@ -2697,9 +2663,9 @@ weston_output_init(struct weston_output *output, struct weston_compositor *c,
 	output->mm_width = mm_width;
 	output->mm_height = mm_height;
 	output->dirty = 1;
-	output->origin_scale = scale;
+	output->origin_scaling_factor = scaling_factor;
 
-	weston_output_transform_scale_init(output, transform, scale);
+	weston_output_transform_init(output, transform);
 	weston_output_init_zoom(output);
 
 	weston_output_move(output, x, y);
