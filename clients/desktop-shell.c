@@ -1115,12 +1115,12 @@ output_handle_done(void *data,
 static void
 output_handle_scale(void *data,
                     struct wl_output *wl_output,
-                    int32_t scale)
+                    wl_fixed_t scaling_factor)
 {
 	struct output *output = data;
 
-	window_set_buffer_scale(output->panel->window, scale);
-	window_set_buffer_scale(output->background->window, scale);
+	window_set_scale(output->panel->window, wl_fixed_to_int(scaling_factor));
+	window_set_scale(output->background->window, wl_fixed_to_int(scaling_factor));
 }
 
 static const struct wl_output_listener output_listener = {

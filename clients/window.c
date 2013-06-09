@@ -157,7 +157,7 @@ struct toysurface {
 	 */
 	cairo_surface_t *(*prepare)(struct toysurface *base, int dx, int dy,
 				    int32_t width, int32_t height, uint32_t flags,
-				    enum wl_output_transform buffer_transform, int32_t buffer_scale);
+				    enum wl_output_transform buffer_transform);
 
 	/*
 	 * Post the surface to the server, returning the server allocation
@@ -165,7 +165,7 @@ struct toysurface {
 	 * after calling this.
 	 */
 	void (*swap)(struct toysurface *base,
-		     enum wl_output_transform buffer_transform, int32_t buffer_scale,
+		     enum wl_output_transform buffer_transform,
 		     struct rectangle *server_allocation);
 
 	/*
@@ -208,7 +208,6 @@ struct surface {
 
 	enum window_buffer_type buffer_type;
 	enum wl_output_transform buffer_transform;
-	int32_t buffer_scale;
 
 	cairo_surface_t *cairo_surface;
 
@@ -232,6 +231,7 @@ struct window {
 	int saved_type;
 	int type;
 	int focus_count;
+	int scale;
 
 	int resizing;
 	int fullscreen_method;
@@ -465,30 +465,14 @@ debug_print(void *proxy, int line, const char *func, const char *fmt, ...)
 
 #endif
 
-static void
-surface_to_buffer_size (enum wl_output_transform buffer_transform, int32_t buffer_scale, int32_t *width, int32_t *height)
+static float
+transform_input (struct window *window, wl_fixed_t in)
 {
-	int32_t tmp;
-
-	switch (buffer_transform) {
-	case WL_OUTPUT_TRANSFORM_90:
-	case WL_OUTPUT_TRANSFORM_270:
-	case WL_OUTPUT_TRANSFORM_FLIPPED_90:
-	case WL_OUTPUT_TRANSFORM_FLIPPED_270:
-		tmp = *width;
-		*width = *height;
-		*height = tmp;
-		break;
-	default:
-		break;
-	}
-
-	*width *= buffer_scale;
-	*height *= buffer_scale;
+	return wl_fixed_to_double(in) / window->scale;
 }
 
 static void
-buffer_to_surface_size (enum wl_output_transform buffer_transform, int32_t buffer_scale, int32_t *width, int32_t *height)
+surface_to_buffer_size (enum wl_output_transform buffer_transform, int32_t *width, int32_t *height)
 {
 	int32_t tmp;
 
@@ -504,9 +488,25 @@ buffer_to_surface_size (enum wl_output_transform buffer_transform, int32_t buffe
 	default:
 		break;
 	}
+}
 
-	*width /= buffer_scale;
-	*height /= buffer_scale;
+static void
+buffer_to_surface_size (enum wl_output_transform buffer_transform, int32_t *width, int32_t *height)
+{
+	int32_t tmp;
+
+	switch (buffer_transform) {
+	case WL_OUTPUT_TRANSFORM_90:
+	case WL_OUTPUT_TRANSFORM_270:
+	case WL_OUTPUT_TRANSFORM_FLIPPED_90:
+	case WL_OUTPUT_TRANSFORM_FLIPPED_270:
+		tmp = *width;
+		*width = *height;
+		*height = tmp;
+		break;
+	default:
+		break;
+	}
 }
 
 #ifdef HAVE_CAIRO_EGL
@@ -529,11 +529,11 @@ to_egl_window_surface(struct toysurface *base)
 static cairo_surface_t *
 egl_window_surface_prepare(struct toysurface *base, int dx, int dy,
 			   int32_t width, int32_t height, uint32_t flags,
-			   enum wl_output_transform buffer_transform, int32_t buffer_scale)
+			   enum wl_output_transform buffer_transform)
 {
 	struct egl_window_surface *surface = to_egl_window_surface(base);
 
-	surface_to_buffer_size (buffer_transform, buffer_scale, &width, &height);
+	surface_to_buffer_size (buffer_transform, &width, &height);
 
 	wl_egl_window_resize(surface->egl_window, width, height, dx, dy);
 	cairo_gl_surface_set_size(surface->cairo_surface, width, height);
@@ -543,7 +543,7 @@ egl_window_surface_prepare(struct toysurface *base, int dx, int dy,
 
 static void
 egl_window_surface_swap(struct toysurface *base,
-			enum wl_output_transform buffer_transform, int32_t buffer_scale,
+			enum wl_output_transform buffer_transform,
 			struct rectangle *server_allocation)
 {
 	struct egl_window_surface *surface = to_egl_window_surface(base);
@@ -553,7 +553,7 @@ egl_window_surface_swap(struct toysurface *base,
 					&server_allocation->width,
 					&server_allocation->height);
 
-	buffer_to_surface_size (buffer_transform, buffer_scale,
+	buffer_to_surface_size (buffer_transform,
 				&server_allocation->width,
 				&server_allocation->height);
 }
@@ -1015,7 +1015,7 @@ static const struct wl_buffer_listener shm_surface_buffer_listener = {
 static cairo_surface_t *
 shm_surface_prepare(struct toysurface *base, int dx, int dy,
 		    int32_t width, int32_t height, uint32_t flags,
-		    enum wl_output_transform buffer_transform, int32_t buffer_scale)
+		    enum wl_output_transform buffer_transform)
 {
 	int resize_hint = !!(flags & SURFACE_HINT_RESIZE);
 	struct shm_surface *surface = to_shm_surface(base);
@@ -1051,7 +1051,7 @@ shm_surface_prepare(struct toysurface *base, int dx, int dy,
 		leaf->resize_pool = NULL;
 	}
 
-	surface_to_buffer_size (buffer_transform, buffer_scale, &width, &height);
+	surface_to_buffer_size (buffer_transform, &width, &height);
 
 	if (leaf->cairo_surface &&
 	    cairo_image_surface_get_width(leaf->cairo_surface) == width &&
@@ -1093,7 +1093,7 @@ out:
 
 static void
 shm_surface_swap(struct toysurface *base,
-		 enum wl_output_transform buffer_transform, int32_t buffer_scale,
+		 enum wl_output_transform buffer_transform,
 		 struct rectangle *server_allocation)
 {
 	struct shm_surface *surface = to_shm_surface(base);
@@ -1104,7 +1104,7 @@ shm_surface_swap(struct toysurface *base,
 	server_allocation->height =
 		cairo_image_surface_get_height(leaf->cairo_surface);
 
-	buffer_to_surface_size (buffer_transform, buffer_scale,
+	buffer_to_surface_size (buffer_transform,
 				&server_allocation->width,
 				&server_allocation->height);
 
@@ -1348,7 +1348,7 @@ surface_flush(struct surface *surface)
 	}
 
 	surface->toysurface->swap(surface->toysurface,
-				  surface->buffer_transform, surface->buffer_scale,
+				  surface->buffer_transform,
 				  &surface->server_allocation);
 
 	cairo_surface_destroy(surface->cairo_surface);
@@ -1411,7 +1411,7 @@ surface_create_surface(struct surface *surface, int dx, int dy, uint32_t flags)
 	surface->cairo_surface = surface->toysurface->prepare(
 		surface->toysurface, dx, dy,
 		allocation.width, allocation.height, flags,
-		surface->buffer_transform, surface->buffer_scale);
+		surface->buffer_transform);
 }
 
 static void
@@ -1454,21 +1454,21 @@ window_set_buffer_transform(struct window *window,
 }
 
 void
-window_set_buffer_scale(struct window *window,
-			int32_t scale)
+window_set_scale(struct window *window,
+			int scale)
 {
-	window->main_surface->buffer_scale = scale;
+	window->scale = scale;
 	wl_surface_set_scaling_factor(window->main_surface->surface,
-				   wl_fixed_from_int(scale));
+		wl_fixed_from_int(window->scale));
 }
 
-uint32_t
-window_get_buffer_scale(struct window *window)
+int
+window_get_scale(struct window *window)
 {
-	return window->main_surface->buffer_scale;
+	return window->scale;
 }
 
-uint32_t
+int
 window_get_output_scale(struct window *window)
 {
 	struct window_output *window_output;
@@ -1724,7 +1724,7 @@ widget_cairo_update_transform(struct widget *widget, cairo_t *cr)
 	surface_height = surface->allocation.height;
 
 	transform = surface->buffer_transform;
-	scale = surface->buffer_scale;
+	scale = surface->window->scale;
 
 	switch (transform) {
 	case WL_OUTPUT_TRANSFORM_FLIPPED:
@@ -2748,8 +2748,7 @@ pointer_handle_enter(void *data, struct wl_pointer *pointer,
 	struct input *input = data;
 	struct window *window;
 	struct widget *widget;
-	float sx = wl_fixed_to_double(sx_w);
-	float sy = wl_fixed_to_double(sy_w);
+	float sx, sy;
 
 	if (!surface) {
 		/* enter event for a window we've just destroyed */
@@ -2760,6 +2759,9 @@ pointer_handle_enter(void *data, struct wl_pointer *pointer,
 	input->pointer_enter_serial = serial;
 	input->pointer_focus = wl_surface_get_user_data(surface);
 	window = input->pointer_focus;
+
+	sx = transform_input(window, sx_w);
+	sy = transform_input(window, sy_w);
 
 	if (window->resizing) {
 		window->resizing = 0;
@@ -2792,8 +2794,8 @@ pointer_handle_motion(void *data, struct wl_pointer *pointer,
 	struct window *window = input->pointer_focus;
 	struct widget *widget;
 	int cursor;
-	float sx = wl_fixed_to_double(sx_w);
-	float sy = wl_fixed_to_double(sy_w);
+	float sx = transform_input(window, sx_w);
+	float sy = transform_input(window, sy_w);
 
 	input->sx = sx;
 	input->sy = sy;
@@ -3262,8 +3264,8 @@ data_device_motion(void *data, struct wl_data_device *data_device,
 {
 	struct input *input = data;
 	struct window *window = input->pointer_focus;
-	float x = wl_fixed_to_double(x_w);
-	float y = wl_fixed_to_double(y_w);
+	float x = transform_input(window, x_w);
+	float y = transform_input(window, y_w);
 	void *types_data;
 
 	input->sx = x;
@@ -4162,7 +4164,6 @@ surface_create(struct window *window)
 
 	surface->window = window;
 	surface->surface = wl_compositor_create_surface(display->compositor);
-	surface->buffer_scale = 1;
 	wl_surface_add_listener(surface->surface, &surface_listener, window);
 
 	wl_list_insert(&window->subsurface_list, &surface->link);
@@ -4198,6 +4199,7 @@ window_create_internal(struct display *display,
 	window->type = type;
 	window->fullscreen_method = WL_SHELL_SURFACE_FULLSCREEN_METHOD_DEFAULT;
 	window->configure_requests = 0;
+	window->scale = 1;
 
 	if (display->argb_device)
 #ifdef HAVE_CAIRO_EGL
@@ -4400,7 +4402,7 @@ window_show_menu(struct display *display,
 
 	menu->window = window;
 	menu->widget = window_add_widget(menu->window, menu);
-	window_set_buffer_scale (menu->window, window_get_buffer_scale (parent));
+	window_set_scale(menu->window, window_get_scale(parent));
 	window_set_buffer_transform (menu->window, window_get_buffer_transform (parent));
 	menu->entries = entries;
 	menu->count = count;
@@ -4499,11 +4501,10 @@ display_handle_done(void *data,
 static void
 display_handle_scale(void *data,
 		     struct wl_output *wl_output,
-		     int32_t scale)
+		     wl_fixed_t scale)
 {
 	struct output *output = data;
-
-	output->scale = scale;
+	output->scale = wl_fixed_to_int(scale);
 }
 
 static void
@@ -4650,7 +4651,7 @@ output_get_transform(struct output *output)
 	return output->transform;
 }
 
-uint32_t
+int
 output_get_scale(struct output *output)
 {
 	return output->scale;

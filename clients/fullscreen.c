@@ -147,7 +147,7 @@ redraw_handler(struct widget *widget, void *data)
 		    "Fullscreen: %d, method: %s\n"
 		    "Keys: (s)cale, (t)ransform, si(z)e, (m)ethod, (f)ullscreen, (q)uit\n",
 		    fullscreen->width, fullscreen->height,
-		    window_get_buffer_scale (fullscreen->window),
+		    window_get_scale (fullscreen->window),
 		    window_get_buffer_transform (fullscreen->window),
 		    fullscreen->pointer_x, fullscreen->pointer_y,
 		    fullscreen->fullscreen, method_name[fullscreen->fullscreen_method]);
@@ -205,12 +205,12 @@ key_handler(struct window *window, struct input *input, uint32_t time,
 		break;
 
 	case XKB_KEY_s:
-		scale = window_get_buffer_scale (window);
+		scale = window_get_scale (window);
 		if (scale == 1)
 			scale = 2;
 		else
 			scale = 1;
-		window_set_buffer_scale(window, scale);
+		window_set_scale(window, scale);
 		window_schedule_redraw(window);
 		break;
 

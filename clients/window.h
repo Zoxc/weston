@@ -256,14 +256,14 @@ void
 window_set_buffer_transform(struct window *window,
 			    enum wl_output_transform transform);
 
-uint32_t
-window_get_buffer_scale(struct window *window);
+int
+window_get_scale(struct window *window);
 
 void
-window_set_buffer_scale(struct window *window,
-                        int32_t scale);
+window_set_scale(struct window *window,
+                        int scale);
 
-uint32_t
+int
 window_get_output_scale(struct window *window);
 
 void
@@ -517,7 +517,7 @@ output_get_wl_output(struct output *output);
 enum wl_output_transform
 output_get_transform(struct output *output);
 
-uint32_t
+int
 output_get_scale(struct output *output);
 
 void

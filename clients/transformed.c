@@ -140,7 +140,7 @@ output_handler(struct window *window, struct output *output, int enter,
 		return;
 
 	window_set_buffer_transform(window, output_get_transform(output));
-	window_set_buffer_scale(window, output_get_scale(output));
+	window_set_scale(window, output_get_scale(output));
 	window_schedule_redraw(window);
 }
 
@@ -155,7 +155,7 @@ key_handler(struct window *window, struct input *input, uint32_t time,
 		return;
 
 	transform = window_get_buffer_transform (window);
-	scale = window_get_buffer_scale (window);
+	scale = window_get_scale(window);
 	switch (sym) {
 	case XKB_KEY_Left:
 		if (transform == 0)
@@ -191,9 +191,9 @@ key_handler(struct window *window, struct input *input, uint32_t time,
 	}
 
 	printf ("setting buffer transform to %d\n", transform);
-	printf ("setting buffer scale to %d\n", scale);
+	printf ("setting scale to %d\n", scale);
 	window_set_buffer_transform(window, transform);
-	window_set_buffer_scale(window, scale);
+	window_set_scale(window, scale);
 	window_schedule_redraw(window);
 }
 

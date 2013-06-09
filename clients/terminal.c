@@ -2523,7 +2523,7 @@ output_handler(struct window *window, struct output *output, int enter,
 {
 	if (enter)
 		window_set_buffer_transform(window, output_get_transform(output));
-	window_set_buffer_scale(window, window_get_output_scale(window));
+	window_set_scale(window, window_get_output_scale(window));
 	window_schedule_redraw(window);
 }
 
