@@ -1,126 +1,76 @@
 <protocol name="cms">
-  <interface name="wl_cms" version="1">
-    <enum name="gamma">
-      <description summary="the gamma function of a color space"/>
-      <entry name="srgb" value="0" summary="the sRGB gamma function"/>
-      <entry name="srgb_encoded_alpha" value="1">
-        <description summary="the sRGB gamma function with alpha multiplied in before">
-         The sRGB gamma function with alpha multiplied in before when
-         using premultiplied alpha: to_srgb_gamma(color * alpha).
-        </description>
-      </entry>
-      <entry name="linear" value="2"/>
-      <entry name="output" value="3">
-        <description summary="display colors without gamma conversion">
-          Colors are displayed without any gamma conversions.
-          This is only valid when passed by the compositing_space event.
-        </description>
-      </entry>
-    </enum>
-
-    <enum name="gamut">
-      <description summary="the gamut of a color space"/>
-      <entry name="srgb" value="0" summary="the sRGB gamut"/>
-      <entry name="custom" value="3">
-        <description summary="display colors without gamut conversion">
-          A custom gamut is used as specified by the parameters argument.
-          This can not be used with wl_color_space.set_gamut.
-        </description>
-      </entry>
-    </enum>
-
-    <enum name="model">
-      <description summary="the model of a color space">
-        This specifies the color model of a color space. The value of the parameters gamut array depends on this.
-      </description>
-      <entry name="rgb" value="0">
-        <description summary="RGB color model">
-          This specifies an RGB color model. The content of the parameters is the CIE 1931 XYZ
-          coordiantes of the red, green and blue primaries followed by the white point.
-          These are stored as an array of C floats.
-        </description>
-      </entry>
-    </enum>
-
-    <enum name="color_space" summary="special color spaces">
-      <entry name="srgb" value="0">
-        <description summary="sRGB color space">
-          The sRGB color space. This is the default value of wl_surfaces.
-        </description>
-      </entry>
-      <entry name="compositing" value="1">
-        <description summary="compositing color space">
-          The color space of a wl_surface is the same color space as the compositor's
-          compositing space. This means that no conversions will be done before
-          compositing.
-        </description>
-      </entry>
-      <entry name="output" value="2">
-        <description summary="display colors as-is">
-          Colors are displayed as-is on the wl_output.
-          The colors can be subject to temporary conversions so this is not
-          guaranteed to be a more efficient color space than the compositing
-          color space, but it's a requirement for direct scan-out of surfaces,
-          in which case it will be more efficient.
-        </description>
-      </entry>
-    </enum>
-
-    <request name="create_color_space" summary="create a new color space">
+  <interface name="wl_cms_output_info" version="1">
+    <event name="new_color_space" summary="a new compositor color space">
       <arg name="id" type="new_id" interface="wl_color_space"/>
-    </request>
+    </event>
 
-    <request name="set_surface_color_space">
-      <description summary="sets the color space of a surface to the passed special color space">
-        This request sets the color space of a wl_surface.
-        It's state is buffered so triggering wl_surface.commit is required for it to take effect.
+    <event name="compositing_color_space">
+      <description summary="info about the output's composing color space">
+        This event is send on binding and when the output's composing color space changes.
       </description>
-      <arg name="surface" type="object" interface="wl_surface"/>
-      <arg name="color_space" type="int"/>
-    </request>
+      <arg name="output" type="object" interface="wl_output"/>
+      <arg name="color_space" type="object" interface="wl_color_space"/>
+    </event>
 
-    <request name="set_surface_color_space_object">
+    <event name="output_color_space">
+      <description summary="update output color space">
+        This event is send on binding and when an wl_output's color space changes.
+      </description>
+      <arg name="output" type="object" interface="wl_output"/>
+      <arg name="color_space" type="object" interface="wl_color_space"/>
+    </event>
+  </interface>
+
+  <interface name="wl_cms" version="1">
+    <request name="set_surface_color_space">
       <description summary="set the color space of a surface">
         This request sets the color space of a wl_surface.
         It's state is buffered so triggering wl_surface.commit is required for it to take effect.
       </description>
       <arg name="surface" type="object" interface="wl_surface"/>
-      <arg name="color_space" type="object" interface="wl_color_space"/>
+      <arg name="color_space" type="object" interface="wl_color_space" allow-null="true"/>
     </request>
 
-    <event name="compositing_space">
-      <description summary="info about the compositor's composing color space">
-        This event is send on binding and when the compositor's composing color space changes.
-        When the composing color space changes all surfaces with the compositing gamut will remain
-        in the old composing color space. The client is expected to render the next frame in the
-        new composing color space and update it by requesting set_surface_color_space with color_space
-        set as compositing.
-      </description>
-      <arg name="model" type="int"/>
-      <arg name="gamma" type="int"/>
-      <arg name="gamut" type="int"/>
-      <arg name="parameters" type="array"/>
-    </event>
-
-    <event name="output_profile">
-      <description summary="update output profile">
-        This event is send when an wl_output's color space profile changes or becomes
-        available.
-      </description>
-      <arg name="output" type="object" interface="wl_output"/>
+    <request name="color_space_from_profile" summary="create a new color space from a profile">
+      <arg name="id" type="new_id" interface="wl_color_space"/>
       <arg name="mime_type" type="string"/>
       <arg name="fd" type="fd"/>
-    </event>
+    </request>
+    
+    <request name="color_space_from_preset" summary="create a new color space from a preset">
+      <arg name="id" type="new_id" interface="wl_color_space"/>
+      <arg name="preset" type="int"/>
+    </request>
   </interface>
 
   <interface name="wl_color_space" version="1">
     <description summary="a color space">
       This is an object representing a single color space.
     </description>
-
-    <enum name="error">
-      <entry name="invalid_gamma" value="0"/>
+    
+    <enum name="preset">
+      <description summary="a color space"/>
+      <entry name="srgb" value="0" summary="the sRGB color space"/>
+      <entry name="srgb_encoded_alpha" value="1">
+        <description summary="the sRGB color space with alpha multiplied in before">
+         The sRGB color space with alpha multiplied in before when
+         using premultiplied alpha: to_srgb_gamma(color * alpha).
+        </description>
+      </entry>
+      <entry name="output" value="3">
+        <description summary="display colors without conversion">
+          Colors are displayed without any conversions.
+        </description>
+      </entry>
     </enum>
+
+    <event name="outdated">
+      <description summary="mark this color space as outdated">
+        The compositor doesn't use this color space any more.
+        The client must destroy this color space when receiving the event.
+        The compositor will not send this event for color spaces created by the client.
+      </description>
+    </event>
 
     <request name="destroy" type="destructor">
       <description summary="destroy the color space">
@@ -128,36 +78,22 @@
       </description>
     </request>
 
-    <request name="set_model">
-      <arg name="model" type="int"/>
-    </request>
-
-    <request name="set_gamma">
-      <arg name="gamma" type="int"/>
-    </request>
-
-    <request name="set_gamut">
-      <description summary="change color space gamut">
-        This changes the gamut to one of the predefined values passed by the gamut argument.
-        If the passed gamut is output, the gamma will be set to output as well.
+    <request name="info">
+      <description summary="request color space info">
+         This makes the compositor reply with an info_* event.
       </description>
-      <arg name="gamut" type="int"/>
     </request>
 
-    <request name="load_gamut">
-      <description summary="load color space gamut">
-        This loads the gamut from the parameters arguments which values depends on the current color space model.
-      </description>
-      <arg name="parameters" type="array"/>
-    </request>
+    <event name="info_preset" summary="info about a preset color space">
+      <arg name="preset" type="int"/>
+    </event>
 
-    <request name="load_profile">
-      <description summary="load color space profile">
-        This loads as many properties as possible for the color space from the passed profile data.
-        Properties not specified in the profile data will be set to the default value.
-      </description>
+    <event name="info_profile" summary="info about a color space based on a profile">
       <arg name="mime_type" type="string"/>
       <arg name="fd" type="fd"/>
-    </request>
+    </event>
+
+    <event name="info_invalid" summary="the color space is invalid">
+    </event>
   </interface>
 </protocol>
