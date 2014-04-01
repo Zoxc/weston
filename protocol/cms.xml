@@ -1,22 +1,32 @@
 <protocol name="cms">
   <interface name="wl_cms_output_info" version="1">
-    <event name="new_color_space" summary="a new compositor color space">
-      <arg name="id" type="new_id" interface="wl_color_space"/>
-    </event>
-
-    <event name="compositing_color_space">
-      <description summary="info about the output's composing color space">
-        This event is send on binding and when the output's composing color space changes.
+    <description summary="an interface for wl_output color space information ">
+      This interface can be bound to access color space information for wl_outputs.
+    </description>
+    
+    <event name="new_color_space">
+      <description summary="a new compositor color space">
+        This event is sent when the compositor has a new color space it wants
+        clients to know about. Such color spaces can appear in the output_color_space event.
+        
+        The client should not destroy the color space unless the outdated event is passed to it.
+        
+        The client is not expected to do anything in response to this event.
       </description>
-      <arg name="output" type="object" interface="wl_output"/>
-      <arg name="color_space" type="object" interface="wl_color_space"/>
+      <arg name="id" type="new_id" interface="wl_color_space"/>
     </event>
 
     <event name="output_color_space">
       <description summary="update output color space">
-        This event is send on binding and when an wl_output's color space changes.
+        This event is send on binding a wl_output, on binding wl_cms_output_info for any bound wl_output
+        and when any of the bound wl_output's color spaces changes.
+        It is eventually followed by a wl_output.done event.
+        
+        'compositing_color_space' is the color space the client should try to render to,
+        unless it is fullscreen in which case it should try to use 'color_space'.
       </description>
       <arg name="output" type="object" interface="wl_output"/>
+      <arg name="compositing_color_space" type="object" interface="wl_color_space"/>
       <arg name="color_space" type="object" interface="wl_color_space"/>
     </event>
   </interface>
@@ -26,18 +36,42 @@
       <description summary="set the color space of a surface">
         This request sets the color space of a wl_surface.
         It's state is buffered so triggering wl_surface.commit is required for it to take effect.
+        
+        If color_space is null, the color space of the wl_surface will become the default color space for the wl_surface.
       </description>
       <arg name="surface" type="object" interface="wl_surface"/>
       <arg name="color_space" type="object" interface="wl_color_space" allow-null="true"/>
     </request>
 
-    <request name="color_space_from_profile" summary="create a new color space from a profile">
+    <request name="color_space_from_profile">
+      <description summary="create a new color space from a profile">
+        This creates a new color space from the passed file and mime-type.
+        
+        If the compositor is unable to create a color space from the given file and mime-type
+        it will create a wl_color_space in an invalid state.
+        
+        The client must use wl_color_space.check_validity and wait for wl_color_space.validity
+        before using the wl_color_space in a set_surface_color_space request.
+      </description>
       <arg name="id" type="new_id" interface="wl_color_space"/>
       <arg name="mime_type" type="string"/>
       <arg name="fd" type="fd"/>
     </request>
     
     <request name="color_space_from_preset" summary="create a new color space from a preset">
+      <description summary="create a new color space from a preset">
+        This creates a new color space from the passed preset.
+        
+        If the compositor is unable to create a color space from the given preset
+        it will create a wl_color_space in an invalid state.
+        
+        The client must use wl_color_space.check_validity and wait for wl_color_space.validity
+        before using the wl_color_space in a set_surface_color_space request.
+        
+        The compositor is required to support the sRGB color space and such
+        color spaces will never be created in an invalid state. Requests to create a sRGB color space
+        need not use wl_color_space.check_validity.
+      </description>
       <arg name="id" type="new_id" interface="wl_color_space"/>
       <arg name="preset" type="int"/>
     </request>
@@ -53,7 +87,7 @@
       <entry name="srgb" value="0" summary="the sRGB color space"/>
       <entry name="srgb_encoded_alpha" value="1">
         <description summary="the sRGB color space with alpha multiplied in before">
-         The sRGB color space with alpha multiplied in before when
+         The sRGB color space with alpha multiplied inside the gamma function when
          using premultiplied alpha: to_srgb_gamma(color * alpha).
         </description>
       </entry>
@@ -66,9 +100,11 @@
 
     <event name="outdated">
       <description summary="mark this color space as outdated">
-        The compositor doesn't use this color space any more.
-        The client must destroy this color space when receiving the event.
-        The compositor will not send this event for color spaces created by the client.
+        The compositor doesn't use this color space any more and the client
+        must destroy this color space when receiving the event.
+        
+        The compositor will only send this event for color spaces created by
+        wl_cms_output_info.new_color_space.
       </description>
     </event>
 
@@ -93,7 +129,28 @@
       <arg name="fd" type="fd"/>
     </event>
 
-    <event name="info_invalid" summary="the color space is invalid">
+    <enum name="validity">
+      <entry name="valid" value="0"/>
+      <entry name="invalid" value="1"/>
+    </enum>
+
+    <request name="check_validity">
+      <description summary="check the validity of the color space">
+         Asks if the color space is valid. The compositor will reply with a validity event.
+         Color spaces created by the compositor are always valid. Other color spaces have to be
+         validated by the client before use.
+      </description>
+    </request>
+
+    <event name="validity">
+      <description summary="reply of check_validity">
+        If 'validity' is invalid, the client must not use this object on any wl_cms.set_surface_color_space requests.
+        'error' may specify the reason for why the color space is invalid.
+        
+        If 'valid' is valid, the client can use the color space and error should be empty.
+      </description>
+      <arg name="validity" type="uint" />
+      <arg name="error" type="string"/>
     </event>
   </interface>
 </protocol>
