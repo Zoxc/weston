@@ -24,6 +24,8 @@
         
         'compositing_color_space' is the color space the client should try to render to,
         unless it is fullscreen in which case it should try to use 'color_space'.
+        
+        Either both of compositing_color_space and color_space must be a ignorant color space or neither can be.
       </description>
       <arg name="output" type="object" interface="wl_output"/>
       <arg name="compositing_color_space" type="object" interface="wl_color_space"/>
@@ -38,6 +40,9 @@
         It's state is buffered so triggering wl_surface.commit is required for it to take effect.
         
         If color_space is null, the color space of the wl_surface will become the default color space for the wl_surface.
+        
+        If color_space is a ignorant color space, the colors on the wl_surface will appear on the outputs
+        as if no conversions was done.
       </description>
       <arg name="surface" type="object" interface="wl_surface"/>
       <arg name="color_space" type="object" interface="wl_color_space" allow-null="true"/>
@@ -91,7 +96,7 @@
          using premultiplied alpha: to_srgb_gamma(color * alpha).
         </description>
       </entry>
-      <entry name="output" value="3">
+      <entry name="ignorant" value="3">
         <description summary="display colors without conversion">
           Colors are displayed without any conversions.
         </description>
