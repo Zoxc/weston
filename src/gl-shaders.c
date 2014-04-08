@@ -23,6 +23,511 @@
 
 #include "gl-internal.h"
 
+#define STRINGIFY(expr) #expr
+#define STRINGIFY_VALUE(expr) STRINGIFY(expr)
+
+static const size_t attribute_counts[ATTRIBUTE_COUNT] = {
+	INPUT_COUNT,
+	OUTPUT_COUNT,
+	CONVERSION_COUNT
+};
+
+struct shader_builder;
+
+typedef int (*gl_shader_constructor_t)
+				  (struct shader_builder *builder);
+typedef void (*gl_shader_setup_uniforms_t)(struct shader_builder *builder,
+					   struct gl_shader *shader);
+
+struct gl_input_type_desc {
+	int transparent;
+	gl_shader_constructor_t constructor;
+	gl_shader_setup_uniforms_t setup_uniforms;
+};
+
+struct shader_string {
+	size_t length;
+	const char *str;
+};
+
+struct shader_string_list {
+	struct shader_builder *builder;
+	struct wl_array array;
+};
+
+struct shader_builder {
+	struct gl_renderer *renderer;
+	struct gl_input_type_desc *desc;
+	int error;
+	size_t attributes[ATTRIBUTE_COUNT];
+	struct shader_string_list directives, global, body;
+	size_t result_size;
+	struct wl_array result;
+};
+
+static void
+shader_string_list_init(struct shader_string_list *strings,
+			struct shader_builder *builder)
+{
+	strings->builder = builder;
+	wl_array_init(&strings->array);
+}
+
+static void
+shader_builder_init(struct shader_builder *builder)
+{
+	builder->error = 0;
+	builder->result_size = 1;
+	wl_array_init(&builder->result);
+	shader_string_list_init(&builder->directives, builder);
+	shader_string_list_init(&builder->global, builder);
+	shader_string_list_init(&builder->body, builder);
+}
+
+static void
+shader_builder_release(struct shader_builder *builder)
+{
+	wl_array_release(&builder->directives.array);
+	wl_array_release(&builder->global.array);
+	wl_array_release(&builder->body.array);
+}
+
+static void
+append_shader_string_list(char **result, struct shader_string_list *string)
+{
+	struct shader_string *str;
+
+	wl_array_for_each(str, &string->array) {
+		memcpy(*result, str->str, str->length);
+		*result += str->length;
+	}
+}
+
+static const char *
+shader_builder_get_string(struct shader_builder *builder)
+{
+	char *data;
+
+	if (builder->error)
+		return NULL;
+
+	data = wl_array_add(&builder->result, builder->result_size);
+
+	if (!data)
+		return NULL;
+
+	append_shader_string_list(&data, &builder->directives);
+	append_shader_string_list(&data, &builder->global);
+	append_shader_string_list(&data, &builder->body);
+
+	*data = 0;
+
+	return builder->result.data;
+}
+
+static void
+append(struct shader_string_list *list, const char *string)
+{
+	struct shader_string str;
+	struct shader_string *data;
+
+	if (!string) {
+		list->builder->error = 1;
+		return;
+	}
+
+	str.str = string;
+	str.length = strlen(string);
+	list->builder->result_size += str.length;
+
+	if (str.length > list->builder->result_size)
+		list->builder->error = 3;
+
+	data = wl_array_add(&list->array, sizeof(str));
+	if (!data)
+		list->builder->error = 2;
+	else
+		*data = str;
+}
+
+static int
+shader_rgbx_constructor(struct shader_builder *sb)
+{
+	append(&sb->global, "uniform sampler2D texture;\n");
+	append(&sb->body,
+		"gl_FragColor.rgb = texture2D(texture, texture_coord).rgb;\n" \
+		"gl_FragColor.a = 1.0;\n");
+
+	return 1;
+}
+
+static int
+shader_rgba_constructor(struct shader_builder *sb)
+{
+	append(&sb->global, "uniform sampler2D texture;\n");
+	append(&sb->body,
+		"gl_FragColor = texture2D(texture, texture_coord);\n");
+
+
+	return 1;
+}
+
+static int
+shader_egl_external_constructor(struct shader_builder *sb)
+{
+	if (!sb->renderer->has_egl_image_external)
+		return 0;
+
+	append(&sb->directives,
+		"#extension GL_OES_EGL_image_external : require;\n");
+	append(&sb->global,
+		"uniform samplerExternalOES texture;\n");
+	append(&sb->body,
+		"gl_FragColor = texture2D(texture, texture_coord);\n");
+
+	return 1;
+}
+
+static void
+shader_texture_uniforms(struct shader_builder *sb,
+			struct gl_shader *shader)
+{
+	glUniform1i(glGetUniformLocation(shader->program, "texture"), 0);
+}
+
+static int
+shader_yuv_constructor(struct shader_builder *sb)
+{
+	const char *sample;
+
+	append(&sb->global,
+		"uniform sampler2D planes[" STRINGIFY_VALUE(MAX_PLANES) "];\n");
+
+	switch (sb->attributes[ATTRIBUTE_INPUT]) {
+	case INPUT_Y_UV:
+		sample = "vec3 yuv = vec3(" \
+			"texture2D(planes[0], texture_coord).x," \
+			"texture2D(planes[1], texture_coord).xy);\n";
+		break;
+	case INPUT_Y_U_V:
+		sample = "vec3 yuv = vec3(" \
+			"texture2D(planes[0], texture_coord).x," \
+			"texture2D(planes[1], texture_coord).x," \
+			"texture2D(planes[2], texture_coord).x);\n";
+		break;
+	case INPUT_Y_XUXV:
+		sample = "vec3 yuv = vec3(" \
+			"texture2D(planes[0], texture_coord).x," \
+			"texture2D(planes[1], texture_coord).yw);\n";
+		break;
+	default:
+		sample = NULL;
+	}
+
+	append(&sb->body, sample);
+	append(&sb->body,
+		"yuv = vec3(1.16438356 * (yuv.x - 0.0625), yuv.yz - 0.5);\n" \
+		"gl_FragColor.r = yuv.x + 1.59602678 * yuv.z;\n" \
+		"gl_FragColor.g = yuv.x - 0.39176229 * yuv.y - " \
+			"0.81296764 * yuv.z;\n" \
+		"gl_FragColor.b = yuv.x + 2.01723214 * yuv.y;\n" \
+		"gl_FragColor.a = 1.0;\n");
+
+	return 1;
+}
+
+static void
+shader_yuv_uniforms(struct shader_builder *sb, struct gl_shader *shader)
+{
+	int i;
+	GLint values[MAX_PLANES];
+
+	for (i = 0; i < MAX_PLANES; i++)
+		values[i] = i;
+
+	glUniform1iv(glGetUniformLocation(shader->program, "planes"),
+		     MAX_PLANES, values);
+}
+
+static int
+shader_solid_constructor(struct shader_builder *sb)
+{
+	append(&sb->global, "uniform vec4 color;\n");
+	append(&sb->body, "gl_FragColor = color;\n");
+
+	return 1;
+}
+
+static void
+shader_solid_uniforms(struct shader_builder *sb, struct gl_shader *shader)
+{
+	shader->color_uniform = glGetUniformLocation(shader->program, "color");
+}
+
+static struct gl_input_type_desc input_type_descs[INPUT_COUNT] = {
+	/* INPUT_RGBX */
+	{0, shader_rgbx_constructor, shader_texture_uniforms},
+
+	/* INPUT_RGBA */
+	{1, shader_rgba_constructor, shader_texture_uniforms},
+
+	/* INPUT_EGL_EXTERNAL */
+	{1, shader_egl_external_constructor, shader_texture_uniforms},
+
+	/* INPUT_Y_UV */
+	{0, shader_yuv_constructor, shader_yuv_uniforms},
+
+	/* INPUT_Y_U_V */
+	{0, shader_yuv_constructor, shader_yuv_uniforms},
+
+	/* INPUT_Y_XUXV */
+	{0, shader_yuv_constructor, shader_yuv_uniforms},
+
+	/* INPUT_SOLID */
+	{1, shader_solid_constructor, shader_solid_uniforms},
+};
+
+static void
+attributes_from_permutation(size_t permutation, size_t *attributes)
+{
+	int i;
+	for (i = 0; i < ATTRIBUTE_COUNT; i++) {
+		size_t attribute_count = attribute_counts[i];
+		size_t attribute = permutation % attribute_count;
+		permutation /= attribute_count;
+		attributes[i] = attribute;
+	}
+}
+
+static size_t
+permutation_from_attributes(size_t *attributes)
+{
+	size_t i;
+	size_t result = 0, factor = 1;
+
+	for (i = 0; i < ATTRIBUTE_COUNT; i++) {
+		result += attributes[i] * factor;
+		factor *= attribute_counts[i];
+	}
+
+	return result;
+}
+
+static const char vertex_shader_source[] =
+	"uniform mat4 projection;\n"
+	"attribute vec2 position;\n"
+	"attribute vec2 attr_texture_coord;\n"
+	"varying vec2 texture_coord;\n"
+	"void main()\n"
+	"{\n"
+	"   gl_Position = projection * vec4(position, 0.0, 1.0);\n"
+	"   texture_coord = attr_texture_coord;\n"
+	"}\n";
+
+static GLuint
+compile_shader(GLenum type, const char *source)
+{
+	GLuint s;
+	char msg[512];
+	GLint status;
+
+	s = glCreateShader(type);
+	glShaderSource(s, 1, &source, NULL);
+	glCompileShader(s);
+	glGetShaderiv(s, GL_COMPILE_STATUS, &status);
+	if (!status) {
+		glGetShaderInfoLog(s, sizeof msg, NULL, msg);
+		weston_log("shader source: %s\n", source);
+		weston_log("shader info: %s\n", msg);
+		return GL_NONE;
+	}
+
+	return s;
+}
+
+static struct gl_shader *
+shader_create(GLuint vertex_shader,
+		const char *fragment_source)
+{
+	char msg[512];
+	GLint status;
+	GLuint program, fragment_shader;
+
+	struct gl_shader *shader;
+
+	fragment_shader =
+		compile_shader(GL_FRAGMENT_SHADER, fragment_source);
+
+	if (!fragment_shader)
+		return NULL;
+
+	shader = calloc(1, sizeof(struct gl_shader));
+
+	if (!shader)
+		return NULL;
+
+	program = glCreateProgram();
+
+	glAttachShader(program, vertex_shader);
+	glAttachShader(program, fragment_shader);
+
+	glDeleteShader(fragment_shader);
+
+	glBindAttribLocation(program, 0, "position");
+	glBindAttribLocation(program, 1, "attr_texture_coord");
+
+	glLinkProgram(program);
+	glGetProgramiv(program, GL_LINK_STATUS, &status);
+
+	if (!status) {
+		glGetProgramInfoLog(program, sizeof msg, NULL, msg);
+		weston_log("link info: %s\n", msg);
+		free(shader);
+		return NULL;
+	}
+
+	shader->program = program;
+	shader->projection_uniform = glGetUniformLocation(program,
+							  "projection");
+	shader->alpha_uniform = glGetUniformLocation(program, "alpha");
+
+	return shader;
+}
+
+
+static void
+destroy_shaders(struct gl_shader **shaders, size_t count)
+{
+	size_t i;
+
+	for (i = 0; i < count; i++)
+		if (shaders[i]) {
+			glDeleteProgram(shaders[i]->program);
+			free(shaders[i]);
+		}
+
+	free(shaders);
+}
+
+static int
+create_shader_permutation(struct gl_renderer *renderer,
+	struct gl_shader **shader, size_t permutation, GLuint vertex_shader)
+{
+	struct shader_builder sb;
+	const char *fragment_shader;
+
+	attributes_from_permutation(permutation, sb.attributes);
+
+	sb.renderer = renderer;
+	sb.desc = &input_type_descs[sb.attributes[ATTRIBUTE_INPUT]];
+
+	shader_builder_init(&sb);
+
+	append(&sb.global, "precision mediump float;\n" \
+		"varying vec2 texture_coord;\n" \
+		"uniform float alpha;\n");
+
+	append(&sb.body, "void main()\n{\n");
+
+	if (!sb.desc->constructor(&sb)) {
+		shader_builder_release(&sb);
+		return 0;
+	}
+
+	append(&sb.body, "gl_FragColor *= alpha;\n");
+
+	if (renderer->fragment_shader_debug)
+		append(&sb.body, "gl_FragColor = vec4(0.0, 0.3, 0.0, 0.2) + " \
+			"gl_FragColor * 0.8;\n");
+
+	append(&sb.body, "}\n");
+
+	fragment_shader = shader_builder_get_string(&sb);
+
+	if (!fragment_shader)
+		goto error;
+
+	*shader = shader_create(vertex_shader, fragment_shader);
+
+	if (!*shader)
+		goto error;
+
+	glUseProgram((*shader)->program);
+
+	sb.desc->setup_uniforms(&sb, *shader);
+
+	shader_builder_release(&sb);
+
+	return 0;
+
+error:
+	shader_builder_release(&sb);
+	return -1;
+}
+
+static struct gl_shader **
+create_shader_permutations(struct gl_renderer *gr)
+{
+	struct gl_shader **shaders;
+	size_t i, permutations = 1;
+	unsigned int created = 0;
+	GLuint vertex_shader;
+
+	vertex_shader = compile_shader(GL_VERTEX_SHADER, vertex_shader_source);
+
+	if (!vertex_shader)
+		return NULL;
+
+	for (i = 0; i < ATTRIBUTE_COUNT; i++)
+		permutations *= attribute_counts[i];
+
+	shaders = calloc(permutations, sizeof(shaders));
+
+	if (!shaders)
+		return NULL;
+
+	for (i = 0; i < permutations; i++) {
+		if (create_shader_permutation(gr, &shaders[i],
+				i, vertex_shader) < 0)
+			goto error;
+
+		if (shaders[i])
+			created++;
+	}
+
+	gr->shader_count = permutations;
+
+	weston_log("Created %u shader permutations\n", created);
+
+	glDeleteShader(vertex_shader);
+
+	return shaders;
+
+error:
+	destroy_shaders(shaders, permutations);
+	glDeleteShader(vertex_shader);
+	return NULL;
+}
+
+struct gl_shader *
+gl_select_shader(struct gl_renderer *gr,
+			enum gl_input_attribute input,
+			enum gl_output_attribute output)
+{
+	struct gl_shader *shader;
+	size_t attributes[ATTRIBUTE_COUNT] = {
+		input,
+		output,
+		CONVERSION_NONE
+	};
+
+	shader = gr->shaders[permutation_from_attributes(attributes)];
+
+	assert(shader);
+
+	return shader;
+}
+
 void
 gl_use_shader(struct gl_renderer *gr,
 			     struct gl_shader *shader)
@@ -35,237 +540,51 @@ gl_use_shader(struct gl_renderer *gr,
 }
 
 void
-gl_shader_uniforms(struct gl_shader *shader,
+gl_shader_set_matrix(struct gl_shader *shader,
+		     struct weston_matrix *matrix)
+{
+	GLfloat m[16];
+	size_t i;
+
+	for (i = 0; i < ARRAY_LENGTH(m); i++)
+		m[i] = matrix->d[i];
+
+	glUniformMatrix4fv(shader->projection_uniform,
+			   1, GL_FALSE, m);
+}
+
+void
+gl_shader_setup(struct gl_shader *shader,
 		       struct weston_view *view,
 		       struct weston_output *output)
 {
-	int i;
 	struct gl_surface_state *gs = get_surface_state(view->surface);
 
-	glUniformMatrix4fv(shader->proj_uniform,
-			   1, GL_FALSE, output->matrix.d);
-	glUniform4fv(shader->color_uniform, 1, gs->color);
+	gl_shader_set_matrix(shader, &output->matrix);
+
+	if (gs->input == INPUT_SOLID)
+		glUniform4fv(shader->color_uniform, 1, gs->color);
+
 	glUniform1f(shader->alpha_uniform, view->alpha);
-
-	for (i = 0; i < gs->num_textures; i++)
-		glUniform1i(shader->tex_uniforms[i], i);
-}
-
-static const char vertex_shader[] =
-	"uniform mat4 proj;\n"
-	"attribute vec2 position;\n"
-	"attribute vec2 texcoord;\n"
-	"varying vec2 v_texcoord;\n"
-	"void main()\n"
-	"{\n"
-	"   gl_Position = proj * vec4(position, 0.0, 1.0);\n"
-	"   v_texcoord = texcoord;\n"
-	"}\n";
-
-/* Declare common fragment shader uniforms */
-#define FRAGMENT_CONVERT_YUV						\
-	"  y *= alpha;\n"						\
-	"  u *= alpha;\n"						\
-	"  v *= alpha;\n"						\
-	"  gl_FragColor.r = y + 1.59602678 * v;\n"			\
-	"  gl_FragColor.g = y - 0.39176229 * u - 0.81296764 * v;\n"	\
-	"  gl_FragColor.b = y + 2.01723214 * u;\n"			\
-	"  gl_FragColor.a = alpha;\n"
-
-static const char fragment_debug[] =
-	"  gl_FragColor = vec4(0.0, 0.3, 0.0, 0.2) + gl_FragColor * 0.8;\n";
-
-static const char fragment_brace[] =
-	"}\n";
-
-static const char texture_fragment_shader_rgba[] =
-	"precision mediump float;\n"
-	"varying vec2 v_texcoord;\n"
-	"uniform sampler2D tex;\n"
-	"uniform float alpha;\n"
-	"void main()\n"
-	"{\n"
-	"   gl_FragColor = alpha * texture2D(tex, v_texcoord)\n;"
-	;
-
-static const char texture_fragment_shader_rgbx[] =
-	"precision mediump float;\n"
-	"varying vec2 v_texcoord;\n"
-	"uniform sampler2D tex;\n"
-	"uniform float alpha;\n"
-	"void main()\n"
-	"{\n"
-	"   gl_FragColor.rgb = alpha * texture2D(tex, v_texcoord).rgb\n;"
-	"   gl_FragColor.a = alpha;\n"
-	;
-
-static const char texture_fragment_shader_egl_external[] =
-	"#extension GL_OES_EGL_image_external : require\n"
-	"precision mediump float;\n"
-	"varying vec2 v_texcoord;\n"
-	"uniform samplerExternalOES tex;\n"
-	"uniform float alpha;\n"
-	"void main()\n"
-	"{\n"
-	"   gl_FragColor = alpha * texture2D(tex, v_texcoord)\n;"
-	;
-
-static const char texture_fragment_shader_y_uv[] =
-	"precision mediump float;\n"
-	"uniform sampler2D tex;\n"
-	"uniform sampler2D tex1;\n"
-	"varying vec2 v_texcoord;\n"
-	"uniform float alpha;\n"
-	"void main() {\n"
-	"  float y = 1.16438356 * (texture2D(tex, v_texcoord).x - 0.0625);\n"
-	"  float u = texture2D(tex1, v_texcoord).r - 0.5;\n"
-	"  float v = texture2D(tex1, v_texcoord).g - 0.5;\n"
-	FRAGMENT_CONVERT_YUV
-	;
-
-static const char texture_fragment_shader_y_u_v[] =
-	"precision mediump float;\n"
-	"uniform sampler2D tex;\n"
-	"uniform sampler2D tex1;\n"
-	"uniform sampler2D tex2;\n"
-	"varying vec2 v_texcoord;\n"
-	"uniform float alpha;\n"
-	"void main() {\n"
-	"  float y = 1.16438356 * (texture2D(tex, v_texcoord).x - 0.0625);\n"
-	"  float u = texture2D(tex1, v_texcoord).x - 0.5;\n"
-	"  float v = texture2D(tex2, v_texcoord).x - 0.5;\n"
-	FRAGMENT_CONVERT_YUV
-	;
-
-static const char texture_fragment_shader_y_xuxv[] =
-	"precision mediump float;\n"
-	"uniform sampler2D tex;\n"
-	"uniform sampler2D tex1;\n"
-	"varying vec2 v_texcoord;\n"
-	"uniform float alpha;\n"
-	"void main() {\n"
-	"  float y = 1.16438356 * (texture2D(tex, v_texcoord).x - 0.0625);\n"
-	"  float u = texture2D(tex1, v_texcoord).g - 0.5;\n"
-	"  float v = texture2D(tex1, v_texcoord).a - 0.5;\n"
-	FRAGMENT_CONVERT_YUV
-	;
-
-static const char solid_fragment_shader[] =
-	"precision mediump float;\n"
-	"uniform vec4 color;\n"
-	"uniform float alpha;\n"
-	"void main()\n"
-	"{\n"
-	"   gl_FragColor = alpha * color\n;"
-	;
-
-static int
-compile_shader(GLenum type, int count, const char **sources)
-{
-	GLuint s;
-	char msg[512];
-	GLint status;
-
-	s = glCreateShader(type);
-	glShaderSource(s, count, sources, NULL);
-	glCompileShader(s);
-	glGetShaderiv(s, GL_COMPILE_STATUS, &status);
-	if (!status) {
-		glGetShaderInfoLog(s, sizeof msg, NULL, msg);
-		weston_log("shader info: %s\n", msg);
-		return GL_NONE;
-	}
-
-	return s;
-}
-
-static int
-shader_init(struct gl_renderer *renderer, struct gl_shader *shader,
-		   const char *vertex_source, const char *fragment_source)
-{
-	char msg[512];
-	GLint status;
-	int count;
-	const char *sources[3];
-
-	shader->vertex_shader =
-		compile_shader(GL_VERTEX_SHADER, 1, &vertex_source);
-
-	if (renderer->fragment_shader_debug) {
-		sources[0] = fragment_source;
-		sources[1] = fragment_debug;
-		sources[2] = fragment_brace;
-		count = 3;
-	} else {
-		sources[0] = fragment_source;
-		sources[1] = fragment_brace;
-		count = 2;
-	}
-
-	shader->fragment_shader =
-		compile_shader(GL_FRAGMENT_SHADER, count, sources);
-
-	shader->program = glCreateProgram();
-	glAttachShader(shader->program, shader->vertex_shader);
-	glAttachShader(shader->program, shader->fragment_shader);
-	glBindAttribLocation(shader->program, 0, "position");
-	glBindAttribLocation(shader->program, 1, "texcoord");
-
-	glLinkProgram(shader->program);
-	glGetProgramiv(shader->program, GL_LINK_STATUS, &status);
-	if (!status) {
-		glGetProgramInfoLog(shader->program, sizeof msg, NULL, msg);
-		weston_log("link info: %s\n", msg);
-		return -1;
-	}
-
-	shader->proj_uniform = glGetUniformLocation(shader->program, "proj");
-	shader->tex_uniforms[0] = glGetUniformLocation(shader->program, "tex");
-	shader->tex_uniforms[1] = glGetUniformLocation(shader->program, "tex1");
-	shader->tex_uniforms[2] = glGetUniformLocation(shader->program, "tex2");
-	shader->alpha_uniform = glGetUniformLocation(shader->program, "alpha");
-	shader->color_uniform = glGetUniformLocation(shader->program, "color");
-
-	return 0;
-}
-
-static void
-shader_release(struct gl_shader *shader)
-{
-	glDeleteShader(shader->vertex_shader);
-	glDeleteShader(shader->fragment_shader);
-	glDeleteProgram(shader->program);
-
-	shader->vertex_shader = 0;
-	shader->fragment_shader = 0;
-	shader->program = 0;
 }
 
 int
 gl_init_shaders(struct gl_renderer *gr)
 {
-	if (shader_init(gr, &gr->texture_shader_rgba,
-			     vertex_shader, texture_fragment_shader_rgba) < 0)
+	struct gl_shader **shaders = create_shader_permutations(gr);
+
+	if (!shaders)
 		return -1;
-	if (shader_init(gr, &gr->texture_shader_rgbx,
-			     vertex_shader, texture_fragment_shader_rgbx) < 0)
-		return -1;
-	if (gr->has_egl_image_external &&
-			shader_init(gr, &gr->texture_shader_egl_external,
-				vertex_shader, texture_fragment_shader_egl_external) < 0)
-		return -1;
-	if (shader_init(gr, &gr->texture_shader_y_uv,
-			       vertex_shader, texture_fragment_shader_y_uv) < 0)
-		return -1;
-	if (shader_init(gr, &gr->texture_shader_y_u_v,
-			       vertex_shader, texture_fragment_shader_y_u_v) < 0)
-		return -1;
-	if (shader_init(gr, &gr->texture_shader_y_xuxv,
-			       vertex_shader, texture_fragment_shader_y_xuxv) < 0)
-		return -1;
-	if (shader_init(gr, &gr->solid_shader,
-			     vertex_shader, solid_fragment_shader) < 0)
-		return -1;
+
+	if (gr->shaders)
+		gl_destroy_shaders(gr);
+
+	gr->shaders = shaders;
+	gr->solid_shader = gl_select_shader(gr, INPUT_SOLID, OUTPUT_BLEND);
+
+	/* Force use_shader() to call glUseProgram(), since we need to use
+	 * the recompiled version of the shader. */
+	gr->current_shader = NULL;
 
 	return 0;
 }
@@ -273,12 +592,5 @@ gl_init_shaders(struct gl_renderer *gr)
 void
 gl_destroy_shaders(struct gl_renderer *gr)
 {
-	shader_release(&gr->texture_shader_rgba);
-	shader_release(&gr->texture_shader_rgbx);
-	shader_release(&gr->texture_shader_egl_external);
-	shader_release(&gr->texture_shader_y_uv);
-	shader_release(&gr->texture_shader_y_u_v);
-	shader_release(&gr->texture_shader_y_xuxv);
-	shader_release(&gr->solid_shader);
-
+	destroy_shaders(gr->shaders, gr->shader_count);
 }
