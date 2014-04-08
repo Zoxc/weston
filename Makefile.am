@@ -152,10 +152,11 @@ westoninclude_HEADERS =				\
 if ENABLE_EGL
 module_LTLIBRARIES += gl-renderer.la
 gl_renderer_la_LDFLAGS = -module -avoid-version
-gl_renderer_la_LIBADD = $(COMPOSITOR_LIBS) $(EGL_LIBS)
+gl_renderer_la_LIBADD = $(COMPOSITOR_LIBS) $(EGL_LIBS) $(GL_LIBS)
 gl_renderer_la_CFLAGS =				\
 	$(COMPOSITOR_CFLAGS)			\
 	$(EGL_CFLAGS)				\
+	$(GL_CFLAGS)				\
 	$(GCC_CFLAGS)
 gl_renderer_la_SOURCES =			\
 	src/gl-shaders.c			\

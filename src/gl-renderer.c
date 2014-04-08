@@ -422,7 +422,8 @@ repaint_views(struct weston_output *output, pixman_region32_t *damage)
 }
 
 static void
-draw_output_border_texture(struct gl_output_state *go,
+draw_output_border_texture(struct gl_renderer *gr,
+			   struct gl_output_state *go,
 			   enum gl_renderer_border_side side,
 			   int32_t x, int32_t y,
 			   int32_t width, int32_t height)
@@ -461,9 +462,9 @@ draw_output_border_texture(struct gl_output_state *go,
 		glPixelStorei(GL_UNPACK_SKIP_PIXELS_EXT, 0);
 		glPixelStorei(GL_UNPACK_SKIP_ROWS_EXT, 0);
 #endif
-		glTexImage2D(GL_TEXTURE_2D, 0, GL_BGRA_EXT,
+		glTexImage2D(GL_TEXTURE_2D, 0, gr->bgra_internal_format,
 			     img->tex_width, img->height, 0,
-			     GL_BGRA_EXT, GL_UNSIGNED_BYTE, img->data);
+			     gr->bgra_format, GL_UNSIGNED_BYTE, img->data);
 	}
 
 	GLfloat texcoord[] = {
@@ -542,19 +543,19 @@ draw_output_borders(struct weston_output *output,
 	glActiveTexture(GL_TEXTURE0);
 
 	if (border_status & BORDER_TOP_DIRTY)
-		draw_output_border_texture(go, GL_RENDERER_BORDER_TOP,
+		draw_output_border_texture(gr, go, GL_RENDERER_BORDER_TOP,
 					   0, 0,
 					   full_width, top->height);
 	if (border_status & BORDER_LEFT_DIRTY)
-		draw_output_border_texture(go, GL_RENDERER_BORDER_LEFT,
+		draw_output_border_texture(gr, go, GL_RENDERER_BORDER_LEFT,
 					   0, top->height,
 					   left->width, output->current_mode->height);
 	if (border_status & BORDER_RIGHT_DIRTY)
-		draw_output_border_texture(go, GL_RENDERER_BORDER_RIGHT,
+		draw_output_border_texture(gr, go, GL_RENDERER_BORDER_RIGHT,
 					   full_width - right->width, top->height,
 					   right->width, output->current_mode->height);
 	if (border_status & BORDER_BOTTOM_DIRTY)
-		draw_output_border_texture(go, GL_RENDERER_BORDER_BOTTOM,
+		draw_output_border_texture(gr, go, GL_RENDERER_BORDER_BOTTOM,
 					   0, full_height - bottom->height,
 					   full_width, bottom->height);
 }
@@ -774,6 +775,7 @@ gl_renderer_read_pixels(struct weston_output *output,
 			       uint32_t x, uint32_t y,
 			       uint32_t width, uint32_t height)
 {
+	struct gl_renderer *gr = get_renderer(output->compositor);
 	GLenum gl_format;
 	struct gl_output_state *go = get_output_state(output);
 
@@ -782,7 +784,7 @@ gl_renderer_read_pixels(struct weston_output *output,
 
 	switch (format) {
 	case PIXMAN_a8r8g8b8:
-		gl_format = GL_BGRA_EXT;
+		gl_format = gr->bgra_format;
 		break;
 	case PIXMAN_a8b8g8r8:
 		gl_format = GL_RGBA;
@@ -845,7 +847,7 @@ gl_renderer_flush_damage(struct weston_surface *surface)
 
 	if (!gr->has_unpack_subimage) {
 		wl_shm_buffer_begin_access(buffer->shm_buffer);
-		glTexImage2D(GL_TEXTURE_2D, 0, gs->gl_format,
+		glTexImage2D(GL_TEXTURE_2D, 0, gs->gl_internal_format,
 			     gs->pitch, buffer->height, 0,
 			     gs->gl_format, gs->gl_pixel_type,
 			     wl_shm_buffer_get_data(buffer->shm_buffer));
@@ -862,7 +864,7 @@ gl_renderer_flush_damage(struct weston_surface *surface)
 		glPixelStorei(GL_UNPACK_SKIP_PIXELS_EXT, 0);
 		glPixelStorei(GL_UNPACK_SKIP_ROWS_EXT, 0);
 		wl_shm_buffer_begin_access(buffer->shm_buffer);
-		glTexImage2D(GL_TEXTURE_2D, 0, gs->gl_format,
+		glTexImage2D(GL_TEXTURE_2D, 0, gs->gl_internal_format,
 			     gs->pitch, buffer->height, 0,
 			     gs->gl_format, gs->gl_pixel_type, data);
 		wl_shm_buffer_end_access(buffer->shm_buffer);
@@ -920,7 +922,7 @@ gl_renderer_attach_shm(struct weston_surface *es, struct weston_buffer *buffer,
 	struct weston_compositor *ec = es->compositor;
 	struct gl_renderer *gr = get_renderer(ec);
 	struct gl_surface_state *gs = get_surface_state(es);
-	GLenum gl_format, gl_pixel_type;
+	GLenum gl_format, gl_internal_format, gl_pixel_type;
 	int pitch;
 
 	buffer->shm_buffer = shm_buffer;
@@ -931,18 +933,21 @@ gl_renderer_attach_shm(struct weston_surface *es, struct weston_buffer *buffer,
 	case WL_SHM_FORMAT_XRGB8888:
 		gs->input = INPUT_RGBX;
 		pitch = wl_shm_buffer_get_stride(shm_buffer) / 4;
-		gl_format = GL_BGRA_EXT;
+		gl_internal_format = gr->bgra_internal_format;
+		gl_format = gr->bgra_format;
 		gl_pixel_type = GL_UNSIGNED_BYTE;
 		break;
 	case WL_SHM_FORMAT_ARGB8888:
 		gs->input = INPUT_RGBA;
 		pitch = wl_shm_buffer_get_stride(shm_buffer) / 4;
-		gl_format = GL_BGRA_EXT;
+		gl_internal_format = gr->bgra_internal_format;
+		gl_format = gr->bgra_format;
 		gl_pixel_type = GL_UNSIGNED_BYTE;
 		break;
 	case WL_SHM_FORMAT_RGB565:
 		gs->input = INPUT_RGBX;
 		pitch = wl_shm_buffer_get_stride(shm_buffer) / 2;
+		gl_internal_format = GL_RGB;
 		gl_format = GL_RGB;
 		gl_pixel_type = GL_UNSIGNED_SHORT_5_6_5;
 		break;
@@ -957,12 +962,14 @@ gl_renderer_attach_shm(struct weston_surface *es, struct weston_buffer *buffer,
 	 * happening, we need to allocate a new texture buffer. */
 	if (pitch != gs->pitch ||
 	    buffer->height != gs->height ||
+	    gl_internal_format != gs->gl_internal_format ||
 	    gl_format != gs->gl_format ||
 	    gl_pixel_type != gs->gl_pixel_type ||
 	    gs->buffer_type != BUFFER_TYPE_SHM) {
 		gs->pitch = pitch;
 		gs->height = buffer->height;
 		gs->target = GL_TEXTURE_2D;
+		gs->gl_internal_format = gl_internal_format;
 		gs->gl_format = gl_format;
 		gs->gl_pixel_type = gl_pixel_type;
 		gs->buffer_type = BUFFER_TYPE_SHM;
@@ -1522,7 +1529,7 @@ static const EGLint gl_renderer_opaque_attribs[] = {
 	EGL_GREEN_SIZE, 1,
 	EGL_BLUE_SIZE, 1,
 	EGL_ALPHA_SIZE, 0,
-	EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+	EGL_RENDERABLE_TYPE, GL_RENDERER_EGL_OPENGL_BIT,
 	EGL_NONE
 };
 
@@ -1532,7 +1539,7 @@ static const EGLint gl_renderer_alpha_attribs[] = {
 	EGL_GREEN_SIZE, 1,
 	EGL_BLUE_SIZE, 1,
 	EGL_ALPHA_SIZE, 1,
-	EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT,
+	EGL_RENDERABLE_TYPE, GL_RENDERER_EGL_OPENGL_BIT,
 	EGL_NONE
 };
 
@@ -1629,14 +1636,42 @@ gl_renderer_setup(struct weston_compositor *ec, EGLSurface egl_surface)
 	EGLConfig context_config;
 	EGLBoolean ret;
 
+#if !OPENGL_ES_VER
+	static const EGLint context_attribs[] = {
+		EGL_CONTEXT_MAJOR_VERSION_KHR, 2,
+		EGL_CONTEXT_MINOR_VERSION_KHR, 0,
+		EGL_NONE
+	};
+
+	gr->bgra_internal_format = GL_RGBA;
+	gr->bgra_format = GL_BGRA;
+	gr->short_type = GL_UNSIGNED_SHORT;
+#else
 	static const EGLint context_attribs[] = {
 		EGL_CONTEXT_CLIENT_VERSION, 2,
 		EGL_NONE
 	};
 
-	if (!eglBindAPI(EGL_OPENGL_ES_API)) {
+	gr->bgra_internal_format = GL_BGRA_EXT;
+	gr->bgra_format = GL_BGRA_EXT;
+	gr->short_type = GL_UNSIGNED_BYTE;
+#endif
+
+	if (!eglBindAPI(OPENGL_ES_VER ? EGL_OPENGL_ES_API : EGL_OPENGL_API)) {
 		weston_log("failed to bind EGL_OPENGL_ES_API\n");
 		gl_renderer_print_egl_error_state();
+		return -1;
+	}
+
+	extensions =
+		(const char *) eglQueryString(gr->egl_display, EGL_EXTENSIONS);
+	if (!extensions) {
+		weston_log("Retrieving EGL extension string failed.\n");
+		return -1;
+	}
+
+	if (!OPENGL_ES_VER && !strstr(extensions, "EGL_KHR_create_context")) {
+		weston_log("EGL_KHR_create_context required to create OpenGL context\n");
 		return -1;
 	}
 
@@ -1674,7 +1709,7 @@ gl_renderer_setup(struct weston_compositor *ec, EGLSurface egl_surface)
 		return -1;
 	}
 
-	if (!strstr(extensions, "GL_EXT_texture_format_BGRA8888")) {
+	if (OPENGL_ES_VER && !strstr(extensions, "GL_EXT_texture_format_BGRA8888")) {
 		weston_log("GL_EXT_texture_format_BGRA8888 not available\n");
 		return -1;
 	}
@@ -1706,7 +1741,7 @@ gl_renderer_setup(struct weston_compositor *ec, EGLSurface egl_surface)
 						    fan_debug_repaint_binding,
 						    ec);
 
-	weston_log("GL ES 2 renderer features:\n");
+	weston_log("GL renderer features:\n");
 	weston_log_continue(STAMP_SPACE "read-back format: %s\n",
 		ec->read_format == PIXMAN_a8r8g8b8 ? "BGRA" : "RGBA");
 	weston_log_continue(STAMP_SPACE "wl_shm sub-image to texture: %s\n",

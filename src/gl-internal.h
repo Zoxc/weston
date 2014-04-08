@@ -26,7 +26,24 @@
 
 #include "config.h"
 
+#ifdef BUILD_DESKTOP_OPENGL
+
+#define OPENGL_ES_VER 0
+#define GL_GLEXT_PROTOTYPES
+#define GL_RENDERER_EGL_OPENGL_BIT EGL_OPENGL_BIT
+
+#include <GL/gl.h>
+#include <GL/glext.h>
+#include <GLES2/gl2platform.h>
+
+#else
+
+#define OPENGL_ES_VER 2
+#define GL_RENDERER_EGL_OPENGL_BIT EGL_OPENGL_ES2_BIT
 #include <GLES2/gl2.h>
+
+#endif
+
 #include <GLES2/gl2ext.h>
 
 #include <stdlib.h>
@@ -125,6 +142,7 @@ struct gl_surface_state {
 	/* These are only used by SHM surfaces to detect when we need
 	 * to do a full upload to specify a new internal texture
 	 * format */
+	GLenum gl_internal_format;
 	GLenum gl_format;
 	GLenum gl_pixel_type;
 
@@ -157,6 +175,9 @@ struct gl_renderer {
 
 	struct wl_array vertices;
 	struct wl_array vtxcnt;
+
+	GLenum bgra_internal_format, bgra_format;
+	GLenum short_type;
 
 	PFNGLEGLIMAGETARGETTEXTURE2DOESPROC image_target_texture_2d;
 	PFNEGLCREATEIMAGEKHRPROC create_image;

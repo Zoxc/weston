@@ -63,10 +63,19 @@ COMPOSITOR_MODULES="wayland-server >= 1.3.90 pixman-1"
 AC_ARG_ENABLE(egl, [  --disable-egl],,
               enable_egl=yes)
 AM_CONDITIONAL(ENABLE_EGL, test x$enable_egl = xyes)
+AC_ARG_ENABLE(opengl, [  --enable-opengl],,
+		  enable_opengl=no)
+AM_CONDITIONAL(ENABLE_OPENGL, test x$enable_opengl = xyes)
 if test x$enable_egl = xyes; then
 	AC_DEFINE([ENABLE_EGL], [1], [Build Weston with EGL support])
 	PKG_CHECK_MODULES(EGL, [egl >= 7.10 glesv2])
         PKG_CHECK_MODULES([EGL_TESTS], [egl >= 7.10 glesv2 wayland-client wayland-egl])
+	if test x$enable_opengl = xyes; then
+		AC_DEFINE([BUILD_DESKTOP_OPENGL], [1], [Build using desktop OpenGL])
+		PKG_CHECK_MODULES(GL, [gl])
+
+		PKG_CHECK_MODULES(GL, [glesv2])
+	fi
 fi
 
 AC_ARG_ENABLE(xkbcommon,
@@ -517,6 +526,7 @@ AC_MSG_RESULT([
 
 	Cairo Renderer			${with_cairo}
 	EGL				${enable_egl}
+	Desktop OpenGL			${enable_opengl}
 	libxkbcommon			${enable_xkbcommon}
 	xcb_xkb				${have_xcb_xkb}
 	XWayland			${enable_xwayland}
