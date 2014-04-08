@@ -1909,8 +1909,6 @@ gl_renderer_setup(struct weston_compositor *ec, EGLSurface egl_surface)
 	if (strstr(extensions, "GL_OES_EGL_image_external"))
 		gr->has_egl_image_external = 1;
 
-	glActiveTexture(GL_TEXTURE0);
-
 	if (gl_init_shaders(gr) < 0)
 		return -1;
 
