@@ -1,5 +1,6 @@
 /*
  * Copyright © 2012 Intel Corporation
+ * Copyright © 2012 John Kåre Alsaker
  *
  * Permission to use, copy, modify, distribute, and sell this software and
  * its documentation for any purpose is hereby granted without fee, provided
@@ -20,168 +21,7 @@
  * CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
  */
 
-#include "config.h"
-
-#include <GLES2/gl2.h>
-#include <GLES2/gl2ext.h>
-
-#include <stdlib.h>
-#include <string.h>
-#include <ctype.h>
-#include <float.h>
-#include <assert.h>
-#include <linux/input.h>
-
-#include "gl-renderer.h"
-#include "vertex-clipping.h"
-
-#include <EGL/eglext.h>
-#include "weston-egl-ext.h"
-
-struct gl_shader {
-	GLuint program;
-	GLuint vertex_shader, fragment_shader;
-	GLint proj_uniform;
-	GLint tex_uniforms[3];
-	GLint alpha_uniform;
-	GLint color_uniform;
-};
-
-#define BUFFER_DAMAGE_COUNT 2
-
-enum gl_border_status {
-	BORDER_STATUS_CLEAN = 0,
-	BORDER_TOP_DIRTY = 1 << GL_RENDERER_BORDER_TOP,
-	BORDER_LEFT_DIRTY = 1 << GL_RENDERER_BORDER_LEFT,
-	BORDER_RIGHT_DIRTY = 1 << GL_RENDERER_BORDER_RIGHT,
-	BORDER_BOTTOM_DIRTY = 1 << GL_RENDERER_BORDER_BOTTOM,
-	BORDER_ALL_DIRTY = 0xf,
-	BORDER_SIZE_CHANGED = 0x10
-};
-
-struct gl_border_image {
-	GLuint tex;
-	int32_t width, height;
-	int32_t tex_width;
-	void *data;
-};
-
-struct gl_output_state {
-	EGLSurface egl_surface;
-	pixman_region32_t buffer_damage[BUFFER_DAMAGE_COUNT];
-	enum gl_border_status border_damage[BUFFER_DAMAGE_COUNT];
-	struct gl_border_image borders[4];
-	enum gl_border_status border_status;
-};
-
-enum buffer_type {
-	BUFFER_TYPE_NULL,
-	BUFFER_TYPE_SHM,
-	BUFFER_TYPE_EGL
-};
-
-struct gl_surface_state {
-	GLfloat color[4];
-	struct gl_shader *shader;
-
-	GLuint textures[3];
-	int num_textures;
-	int needs_full_upload;
-	pixman_region32_t texture_damage;
-
-	/* These are only used by SHM surfaces to detect when we need
-	 * to do a full upload to specify a new internal texture
-	 * format */
-	GLenum gl_format;
-	GLenum gl_pixel_type;
-
-	EGLImageKHR images[3];
-	GLenum target;
-	int num_images;
-
-	struct weston_buffer_reference buffer_ref;
-	enum buffer_type buffer_type;
-	int pitch; /* in pixels */
-	int height; /* in pixels */
-	int y_inverted;
-
-	struct weston_surface *surface;
-
-	struct wl_listener surface_destroy_listener;
-	struct wl_listener renderer_destroy_listener;
-};
-
-struct gl_renderer {
-	struct weston_renderer base;
-	int fragment_shader_debug;
-	int fan_debug;
-	struct weston_binding *fragment_binding;
-	struct weston_binding *fan_binding;
-
-	EGLDisplay egl_display;
-	EGLContext egl_context;
-	EGLConfig egl_config;
-
-	struct wl_array vertices;
-	struct wl_array vtxcnt;
-
-	PFNGLEGLIMAGETARGETTEXTURE2DOESPROC image_target_texture_2d;
-	PFNEGLCREATEIMAGEKHRPROC create_image;
-	PFNEGLDESTROYIMAGEKHRPROC destroy_image;
-
-#ifdef EGL_EXT_swap_buffers_with_damage
-	PFNEGLSWAPBUFFERSWITHDAMAGEEXTPROC swap_buffers_with_damage;
-#endif
-
-	int has_unpack_subimage;
-
-	PFNEGLBINDWAYLANDDISPLAYWL bind_display;
-	PFNEGLUNBINDWAYLANDDISPLAYWL unbind_display;
-	PFNEGLQUERYWAYLANDBUFFERWL query_buffer;
-	int has_bind_display;
-
-	int has_egl_image_external;
-
-	int has_egl_buffer_age;
-
-	int has_configless_context;
-
-	struct gl_shader texture_shader_rgba;
-	struct gl_shader texture_shader_rgbx;
-	struct gl_shader texture_shader_egl_external;
-	struct gl_shader texture_shader_y_uv;
-	struct gl_shader texture_shader_y_u_v;
-	struct gl_shader texture_shader_y_xuxv;
-	struct gl_shader invert_color_shader;
-	struct gl_shader solid_shader;
-	struct gl_shader *current_shader;
-
-	struct wl_signal destroy_signal;
-};
-
-static inline struct gl_output_state *
-get_output_state(struct weston_output *output)
-{
-	return (struct gl_output_state *)output->renderer_state;
-}
-
-static int
-gl_renderer_create_surface(struct weston_surface *surface);
-
-static inline struct gl_surface_state *
-get_surface_state(struct weston_surface *surface)
-{
-	if (!surface->renderer_state)
-		gl_renderer_create_surface(surface);
-
-	return (struct gl_surface_state *)surface->renderer_state;
-}
-
-static inline struct gl_renderer *
-get_renderer(struct weston_compositor *ec)
-{
-	return (struct gl_renderer *)ec->renderer;
-}
+#include "gl-internal.h"
 
 static const char *
 egl_error_string(EGLint code)
@@ -479,34 +319,6 @@ use_output(struct weston_output *output)
 }
 
 static void
-use_shader(struct gl_renderer *gr,
-			     struct gl_shader *shader)
-{
-	if (gr->current_shader == shader)
-		return;
-
-	glUseProgram(shader->program);
-	gr->current_shader = shader;
-}
-
-static void
-shader_uniforms(struct gl_shader *shader,
-		struct weston_view *view,
-		struct weston_output *output)
-{
-	int i;
-	struct gl_surface_state *gs = get_surface_state(view->surface);
-
-	glUniformMatrix4fv(shader->proj_uniform,
-			   1, GL_FALSE, output->matrix.d);
-	glUniform4fv(shader->color_uniform, 1, gs->color);
-	glUniform1f(shader->alpha_uniform, view->alpha);
-
-	for (i = 0; i < gs->num_textures; i++)
-		glUniform1i(shader->tex_uniforms[i], i);
-}
-
-static void
 draw_view(struct weston_view *ev, struct weston_output *output,
 	  pixman_region32_t *damage) /* in global coordinates */
 {
@@ -537,12 +349,12 @@ draw_view(struct weston_view *ev, struct weston_output *output,
 	glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
 
 	if (gr->fan_debug) {
-		use_shader(gr, &gr->solid_shader);
-		shader_uniforms(&gr->solid_shader, ev, output);
+		gl_use_shader(gr, &gr->solid_shader);
+		gl_shader_uniforms(&gr->solid_shader, ev, output);
 	}
 
-	use_shader(gr, gs->shader);
-	shader_uniforms(gs->shader, ev, output);
+	gl_use_shader(gr, gs->shader);
+	gl_shader_uniforms(gs->shader, ev, output);
 
 	if (ev->transform.enabled || output->zoom.active ||
 	    output->current_scale != ev->surface->buffer_viewport.buffer.scale)
@@ -570,8 +382,8 @@ draw_view(struct weston_view *ev, struct weston_output *output,
 			 * that forces texture alpha = 1.0.
 			 * Xwayland surfaces need this.
 			 */
-			use_shader(gr, &gr->texture_shader_rgbx);
-			shader_uniforms(&gr->texture_shader_rgbx, ev, output);
+			gl_use_shader(gr, &gr->texture_shader_rgbx);
+			gl_shader_uniforms(&gr->texture_shader_rgbx, ev, output);
 		}
 
 		if (ev->alpha < 1.0)
@@ -583,7 +395,7 @@ draw_view(struct weston_view *ev, struct weston_output *output,
 	}
 
 	if (pixman_region32_not_empty(&surface_blend)) {
-		use_shader(gr, gs->shader);
+		gl_use_shader(gr, gs->shader);
 		glEnable(GL_BLEND);
 		repaint_region(ev, &repaint, &surface_blend);
 	}
@@ -709,7 +521,7 @@ draw_output_borders(struct weston_output *output,
 	full_height = output->current_mode->height + top->height + bottom->height;
 
 	glDisable(GL_BLEND);
-	use_shader(gr, shader);
+	gl_use_shader(gr, shader);
 
 	glViewport(0, 0, full_width, full_height);
 
@@ -1335,7 +1147,7 @@ surface_state_handle_renderer_destroy(struct wl_listener *listener, void *data)
 	surface_state_destroy(gs, gr);
 }
 
-static int
+int
 gl_renderer_create_surface(struct weston_surface *surface)
 {
 	struct gl_surface_state *gs;
@@ -1373,197 +1185,6 @@ gl_renderer_create_surface(struct weston_surface *surface)
 	}
 
 	return 0;
-}
-
-static const char vertex_shader[] =
-	"uniform mat4 proj;\n"
-	"attribute vec2 position;\n"
-	"attribute vec2 texcoord;\n"
-	"varying vec2 v_texcoord;\n"
-	"void main()\n"
-	"{\n"
-	"   gl_Position = proj * vec4(position, 0.0, 1.0);\n"
-	"   v_texcoord = texcoord;\n"
-	"}\n";
-
-/* Declare common fragment shader uniforms */
-#define FRAGMENT_CONVERT_YUV						\
-	"  y *= alpha;\n"						\
-	"  u *= alpha;\n"						\
-	"  v *= alpha;\n"						\
-	"  gl_FragColor.r = y + 1.59602678 * v;\n"			\
-	"  gl_FragColor.g = y - 0.39176229 * u - 0.81296764 * v;\n"	\
-	"  gl_FragColor.b = y + 2.01723214 * u;\n"			\
-	"  gl_FragColor.a = alpha;\n"
-
-static const char fragment_debug[] =
-	"  gl_FragColor = vec4(0.0, 0.3, 0.0, 0.2) + gl_FragColor * 0.8;\n";
-
-static const char fragment_brace[] =
-	"}\n";
-
-static const char texture_fragment_shader_rgba[] =
-	"precision mediump float;\n"
-	"varying vec2 v_texcoord;\n"
-	"uniform sampler2D tex;\n"
-	"uniform float alpha;\n"
-	"void main()\n"
-	"{\n"
-	"   gl_FragColor = alpha * texture2D(tex, v_texcoord)\n;"
-	;
-
-static const char texture_fragment_shader_rgbx[] =
-	"precision mediump float;\n"
-	"varying vec2 v_texcoord;\n"
-	"uniform sampler2D tex;\n"
-	"uniform float alpha;\n"
-	"void main()\n"
-	"{\n"
-	"   gl_FragColor.rgb = alpha * texture2D(tex, v_texcoord).rgb\n;"
-	"   gl_FragColor.a = alpha;\n"
-	;
-
-static const char texture_fragment_shader_egl_external[] =
-	"#extension GL_OES_EGL_image_external : require\n"
-	"precision mediump float;\n"
-	"varying vec2 v_texcoord;\n"
-	"uniform samplerExternalOES tex;\n"
-	"uniform float alpha;\n"
-	"void main()\n"
-	"{\n"
-	"   gl_FragColor = alpha * texture2D(tex, v_texcoord)\n;"
-	;
-
-static const char texture_fragment_shader_y_uv[] =
-	"precision mediump float;\n"
-	"uniform sampler2D tex;\n"
-	"uniform sampler2D tex1;\n"
-	"varying vec2 v_texcoord;\n"
-	"uniform float alpha;\n"
-	"void main() {\n"
-	"  float y = 1.16438356 * (texture2D(tex, v_texcoord).x - 0.0625);\n"
-	"  float u = texture2D(tex1, v_texcoord).r - 0.5;\n"
-	"  float v = texture2D(tex1, v_texcoord).g - 0.5;\n"
-	FRAGMENT_CONVERT_YUV
-	;
-
-static const char texture_fragment_shader_y_u_v[] =
-	"precision mediump float;\n"
-	"uniform sampler2D tex;\n"
-	"uniform sampler2D tex1;\n"
-	"uniform sampler2D tex2;\n"
-	"varying vec2 v_texcoord;\n"
-	"uniform float alpha;\n"
-	"void main() {\n"
-	"  float y = 1.16438356 * (texture2D(tex, v_texcoord).x - 0.0625);\n"
-	"  float u = texture2D(tex1, v_texcoord).x - 0.5;\n"
-	"  float v = texture2D(tex2, v_texcoord).x - 0.5;\n"
-	FRAGMENT_CONVERT_YUV
-	;
-
-static const char texture_fragment_shader_y_xuxv[] =
-	"precision mediump float;\n"
-	"uniform sampler2D tex;\n"
-	"uniform sampler2D tex1;\n"
-	"varying vec2 v_texcoord;\n"
-	"uniform float alpha;\n"
-	"void main() {\n"
-	"  float y = 1.16438356 * (texture2D(tex, v_texcoord).x - 0.0625);\n"
-	"  float u = texture2D(tex1, v_texcoord).g - 0.5;\n"
-	"  float v = texture2D(tex1, v_texcoord).a - 0.5;\n"
-	FRAGMENT_CONVERT_YUV
-	;
-
-static const char solid_fragment_shader[] =
-	"precision mediump float;\n"
-	"uniform vec4 color;\n"
-	"uniform float alpha;\n"
-	"void main()\n"
-	"{\n"
-	"   gl_FragColor = alpha * color\n;"
-	;
-
-static int
-compile_shader(GLenum type, int count, const char **sources)
-{
-	GLuint s;
-	char msg[512];
-	GLint status;
-
-	s = glCreateShader(type);
-	glShaderSource(s, count, sources, NULL);
-	glCompileShader(s);
-	glGetShaderiv(s, GL_COMPILE_STATUS, &status);
-	if (!status) {
-		glGetShaderInfoLog(s, sizeof msg, NULL, msg);
-		weston_log("shader info: %s\n", msg);
-		return GL_NONE;
-	}
-
-	return s;
-}
-
-static int
-shader_init(struct gl_shader *shader, struct weston_compositor *ec,
-		   const char *vertex_source, const char *fragment_source)
-{
-	char msg[512];
-	GLint status;
-	int count;
-	const char *sources[3];
-	struct gl_renderer *renderer = get_renderer(ec);
-
-	shader->vertex_shader =
-		compile_shader(GL_VERTEX_SHADER, 1, &vertex_source);
-
-	if (renderer->fragment_shader_debug) {
-		sources[0] = fragment_source;
-		sources[1] = fragment_debug;
-		sources[2] = fragment_brace;
-		count = 3;
-	} else {
-		sources[0] = fragment_source;
-		sources[1] = fragment_brace;
-		count = 2;
-	}
-
-	shader->fragment_shader =
-		compile_shader(GL_FRAGMENT_SHADER, count, sources);
-
-	shader->program = glCreateProgram();
-	glAttachShader(shader->program, shader->vertex_shader);
-	glAttachShader(shader->program, shader->fragment_shader);
-	glBindAttribLocation(shader->program, 0, "position");
-	glBindAttribLocation(shader->program, 1, "texcoord");
-
-	glLinkProgram(shader->program);
-	glGetProgramiv(shader->program, GL_LINK_STATUS, &status);
-	if (!status) {
-		glGetProgramInfoLog(shader->program, sizeof msg, NULL, msg);
-		weston_log("link info: %s\n", msg);
-		return -1;
-	}
-
-	shader->proj_uniform = glGetUniformLocation(shader->program, "proj");
-	shader->tex_uniforms[0] = glGetUniformLocation(shader->program, "tex");
-	shader->tex_uniforms[1] = glGetUniformLocation(shader->program, "tex1");
-	shader->tex_uniforms[2] = glGetUniformLocation(shader->program, "tex2");
-	shader->alpha_uniform = glGetUniformLocation(shader->program, "alpha");
-	shader->color_uniform = glGetUniformLocation(shader->program, "color");
-
-	return 0;
-}
-
-static void
-shader_release(struct gl_shader *shader)
-{
-	glDeleteShader(shader->vertex_shader);
-	glDeleteShader(shader->fragment_shader);
-	glDeleteProgram(shader->program);
-
-	shader->vertex_shader = 0;
-	shader->fragment_shader = 0;
-	shader->program = 0;
 }
 
 static void
@@ -1961,37 +1582,6 @@ gl_renderer_display(struct weston_compositor *ec)
 	return get_renderer(ec)->egl_display;
 }
 
-static int
-compile_shaders(struct weston_compositor *ec)
-{
-	struct gl_renderer *gr = get_renderer(ec);
-
-	if (shader_init(&gr->texture_shader_rgba, ec,
-			     vertex_shader, texture_fragment_shader_rgba) < 0)
-		return -1;
-	if (shader_init(&gr->texture_shader_rgbx, ec,
-			     vertex_shader, texture_fragment_shader_rgbx) < 0)
-		return -1;
-	if (gr->has_egl_image_external &&
-			shader_init(&gr->texture_shader_egl_external, ec,
-				vertex_shader, texture_fragment_shader_egl_external) < 0)
-		return -1;
-	if (shader_init(&gr->texture_shader_y_uv, ec,
-			       vertex_shader, texture_fragment_shader_y_uv) < 0)
-		return -1;
-	if (shader_init(&gr->texture_shader_y_u_v, ec,
-			       vertex_shader, texture_fragment_shader_y_u_v) < 0)
-		return -1;
-	if (shader_init(&gr->texture_shader_y_xuxv, ec,
-			       vertex_shader, texture_fragment_shader_y_xuxv) < 0)
-		return -1;
-	if (shader_init(&gr->solid_shader, ec,
-			     vertex_shader, solid_fragment_shader) < 0)
-		return -1;
-
-	return 0;
-}
-
 static void
 fragment_debug_binding(struct weston_seat *seat, uint32_t time, uint32_t key,
 		       void *data)
@@ -2002,15 +1592,8 @@ fragment_debug_binding(struct weston_seat *seat, uint32_t time, uint32_t key,
 
 	gr->fragment_shader_debug ^= 1;
 
-	shader_release(&gr->texture_shader_rgba);
-	shader_release(&gr->texture_shader_rgbx);
-	shader_release(&gr->texture_shader_egl_external);
-	shader_release(&gr->texture_shader_y_uv);
-	shader_release(&gr->texture_shader_y_u_v);
-	shader_release(&gr->texture_shader_y_xuxv);
-	shader_release(&gr->solid_shader);
-
-	compile_shaders(ec);
+	gl_destroy_shaders(gr);
+	gl_init_shaders(gr);
 
 	/* Force use_shader() to call glUseProgram(), since we need to use
 	 * the recompiled version of the shader. */
@@ -2104,7 +1687,7 @@ gl_renderer_setup(struct weston_compositor *ec, EGLSurface egl_surface)
 
 	glActiveTexture(GL_TEXTURE0);
 
-	if (compile_shaders(ec))
+	if (gl_init_shaders(gr) < 0)
 		return -1;
 
 	gr->fragment_binding =

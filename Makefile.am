@@ -158,6 +158,8 @@ gl_renderer_la_CFLAGS =				\
 	$(EGL_CFLAGS)				\
 	$(GCC_CFLAGS)
 gl_renderer_la_SOURCES =			\
+	src/gl-shaders.c			\
+	src/gl-internal.h			\
 	src/gl-renderer.h			\
 	src/gl-renderer.c			\
 	src/vertex-clipping.c			\
