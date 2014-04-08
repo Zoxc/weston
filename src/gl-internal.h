@@ -73,6 +73,7 @@ enum gl_input_attribute {
 };
 
 struct gl_shader {
+	size_t index;
 	GLuint program;
 	GLint projection_uniform;
 	GLint color_uniform;
@@ -181,6 +182,7 @@ struct gl_renderer {
 	struct gl_shader *solid_shader;
 	struct gl_shader *current_shader;
 
+	GLuint vertex_shader;
 	struct gl_shader **shaders;
 	size_t shader_count;
 

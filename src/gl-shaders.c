@@ -345,30 +345,24 @@ compile_shader(GLenum type, const char *source)
 	return s;
 }
 
-static struct gl_shader *
-shader_create(GLuint vertex_shader,
-		const char *fragment_source)
+static int
+link_program(struct gl_renderer *gr,
+	      struct gl_shader *shader,
+	      const char *fragment_source)
 {
 	char msg[512];
 	GLint status;
 	GLuint program, fragment_shader;
 
-	struct gl_shader *shader;
-
 	fragment_shader =
 		compile_shader(GL_FRAGMENT_SHADER, fragment_source);
 
 	if (!fragment_shader)
-		return NULL;
-
-	shader = calloc(1, sizeof(struct gl_shader));
-
-	if (!shader)
-		return NULL;
+		return -1;
 
 	program = glCreateProgram();
 
-	glAttachShader(program, vertex_shader);
+	glAttachShader(program, gr->vertex_shader);
 	glAttachShader(program, fragment_shader);
 
 	glDeleteShader(fragment_shader);
@@ -382,8 +376,7 @@ shader_create(GLuint vertex_shader,
 	if (!status) {
 		glGetProgramInfoLog(program, sizeof msg, NULL, msg);
 		weston_log("link info: %s\n", msg);
-		free(shader);
-		return NULL;
+		return -1;
 	}
 
 	shader->program = program;
@@ -391,34 +384,19 @@ shader_create(GLuint vertex_shader,
 							  "projection");
 	shader->alpha_uniform = glGetUniformLocation(program, "alpha");
 
-	return shader;
-}
-
-
-static void
-destroy_shaders(struct gl_shader **shaders, size_t count)
-{
-	size_t i;
-
-	for (i = 0; i < count; i++)
-		if (shaders[i]) {
-			glDeleteProgram(shaders[i]->program);
-			free(shaders[i]);
-		}
-
-	free(shaders);
+	return 0;
 }
 
 static int
-create_shader_permutation(struct gl_renderer *renderer,
-	struct gl_shader **shader, size_t permutation, GLuint vertex_shader)
+create_shader(struct gl_renderer *gr,
+	struct gl_shader *shader)
 {
 	struct shader_builder sb;
 	const char *fragment_shader;
 
-	attributes_from_permutation(permutation, sb.attributes);
+	attributes_from_permutation(shader->index, sb.attributes);
 
-	sb.renderer = renderer;
+	sb.renderer = gr;
 	sb.desc = &input_type_descs[sb.attributes[ATTRIBUTE_INPUT]];
 
 	shader_builder_init(&sb);
@@ -436,7 +414,7 @@ create_shader_permutation(struct gl_renderer *renderer,
 
 	append(&sb.body, "gl_FragColor *= alpha;\n");
 
-	if (renderer->fragment_shader_debug)
+	if (gr->fragment_shader_debug)
 		append(&sb.body, "gl_FragColor = vec4(0.0, 0.3, 0.0, 0.2) + " \
 			"gl_FragColor * 0.8;\n");
 
@@ -447,14 +425,12 @@ create_shader_permutation(struct gl_renderer *renderer,
 	if (!fragment_shader)
 		goto error;
 
-	*shader = shader_create(vertex_shader, fragment_shader);
-
-	if (!*shader)
+	if (link_program(gr, shader, fragment_shader) < 0)
 		goto error;
 
-	glUseProgram((*shader)->program);
+	glUseProgram(shader->program);
 
-	sb.desc->setup_uniforms(&sb, *shader);
+	sb.desc->setup_uniforms(&sb, shader);
 
 	shader_builder_release(&sb);
 
@@ -465,63 +441,27 @@ error:
 	return -1;
 }
 
-static struct gl_shader **
-create_shader_permutations(struct gl_renderer *gr)
-{
-	struct gl_shader **shaders;
-	size_t i, permutations = 1;
-	unsigned int created = 0;
-	GLuint vertex_shader;
-
-	vertex_shader = compile_shader(GL_VERTEX_SHADER, vertex_shader_source);
-
-	if (!vertex_shader)
-		return NULL;
-
-	for (i = 0; i < ATTRIBUTE_COUNT; i++)
-		permutations *= attribute_counts[i];
-
-	shaders = calloc(permutations, sizeof(shaders));
-
-	if (!shaders)
-		return NULL;
-
-	for (i = 0; i < permutations; i++) {
-		if (create_shader_permutation(gr, &shaders[i],
-				i, vertex_shader) < 0)
-			goto error;
-
-		if (shaders[i])
-			created++;
-	}
-
-	gr->shader_count = permutations;
-
-	weston_log("Created %u shader permutations\n", created);
-
-	glDeleteShader(vertex_shader);
-
-	return shaders;
-
-error:
-	destroy_shaders(shaders, permutations);
-	glDeleteShader(vertex_shader);
-	return NULL;
-}
-
 struct gl_shader *
 gl_select_shader(struct gl_renderer *gr,
 			enum gl_input_attribute input,
 			enum gl_output_attribute output)
 {
 	struct gl_shader *shader;
+	size_t index;
 	size_t attributes[ATTRIBUTE_COUNT] = {
 		input,
 		output,
 		CONVERSION_NONE
 	};
 
-	shader = gr->shaders[permutation_from_attributes(attributes)];
+	index = permutation_from_attributes(attributes);
+
+	shader = gr->shaders[index];
+
+	if (!shader) {
+		shader = (gr->shaders[index] = calloc(1, sizeof(struct gl_shader)));
+		shader->index = index;
+	}
 
 	assert(shader);
 
@@ -534,6 +474,9 @@ gl_use_shader(struct gl_renderer *gr,
 {
 	if (gr->current_shader == shader)
 		return;
+
+	if (shader->program == 0)
+		create_shader(gr, shader);
 
 	glUseProgram(shader->program);
 	gr->current_shader = shader;
@@ -571,15 +514,30 @@ gl_shader_setup(struct gl_shader *shader,
 int
 gl_init_shaders(struct gl_renderer *gr)
 {
-	struct gl_shader **shaders = create_shader_permutations(gr);
+	struct gl_shader **shaders;
+	size_t i, permutations = 1;
 
-	if (!shaders)
+	for (i = 0; i < ATTRIBUTE_COUNT; i++)
+		permutations *= attribute_counts[i];
+
+	GLuint vertex_shader = compile_shader(GL_VERTEX_SHADER, vertex_shader_source);
+
+	if (!vertex_shader)
 		return -1;
 
-	if (gr->shaders)
-		gl_destroy_shaders(gr);
+	shaders = calloc(permutations, sizeof(shaders));
 
+	if (!shaders) {
+		glDeleteShader(vertex_shader);
+		return -1;
+	}
+
+	gl_destroy_shaders(gr);
+
+	gr->vertex_shader = vertex_shader;
 	gr->shaders = shaders;
+	gr->shader_count = permutations;
+
 	gr->solid_shader = gl_select_shader(gr, INPUT_SOLID, OUTPUT_BLEND);
 
 	/* Force use_shader() to call glUseProgram(), since we need to use
@@ -592,5 +550,18 @@ gl_init_shaders(struct gl_renderer *gr)
 void
 gl_destroy_shaders(struct gl_renderer *gr)
 {
-	destroy_shaders(gr->shaders, gr->shader_count);
+	if (gr->shaders) {
+		size_t i;
+
+		for (i = 0; i < gr->shader_count; i++)
+			if (gr->shaders[i]) {
+				glDeleteProgram(gr->shaders[i]->program);
+				free(gr->shaders[i]);
+			}
+
+		free(gr->shaders);
+
+		glDeleteShader(gr->vertex_shader);
+		gr->shaders = NULL;
+	}
 }
