@@ -472,7 +472,8 @@ draw_view(struct weston_view *ev, struct weston_output *output,
 	/* non-opaque region in surface coordinates: */
 	pixman_region32_t surface_blend;
 	GLint filter;
-	int i;
+	int i, transparent;
+	enum gl_output_attribute output_attribute;
 
 	/* In case of a runtime switch of renderers, we may not have received
 	 * an attach for this surface since the switch. In that case we don't
@@ -495,7 +496,10 @@ draw_view(struct weston_view *ev, struct weston_output *output,
 		gl_shader_setup(gr->solid_shader, ev, output);
 	}
 
-	shader = gl_select_shader(gr, gs->input, OUTPUT_BLEND, gs->conversion);
+	transparent = ev->alpha < 1.0;
+	output_attribute = transparent ? OUTPUT_TRANSPARENT : OUTPUT_BLEND;
+
+	shader = gl_select_shader(gr, gs->input, output_attribute, gs->conversion);
 
 	gl_use_shader(gr, shader);
 	gl_shader_setup(shader, ev, output);
@@ -528,13 +532,13 @@ draw_view(struct weston_view *ev, struct weston_output *output,
 			 */
 			struct gl_shader *rgbx_shader = gl_select_shader(gr,
 				INPUT_RGBX,
-				OUTPUT_BLEND,
+				output_attribute,
 				gs->conversion);
 			gl_use_shader(gr, rgbx_shader);
 			gl_shader_setup(rgbx_shader, ev, output);
 		}
 
-		if (ev->alpha < 1.0)
+		if (transparent)
 			glEnable(GL_BLEND);
 		else
 			glDisable(GL_BLEND);

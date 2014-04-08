@@ -76,6 +76,7 @@ enum gl_conversion_attribute {
 
 enum gl_output_attribute {
 	OUTPUT_BLEND,
+	OUTPUT_TRANSPARENT,
 	OUTPUT_TO_SRGB,
 	OUTPUT_COUNT
 };
