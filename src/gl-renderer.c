@@ -1069,6 +1069,24 @@ ensure_textures(struct gl_surface_state *gs, int num_textures)
 }
 
 static void
+destroy_images(struct gl_renderer *gr, struct gl_surface_state *gs)
+{
+	int i;
+
+	for (i = 0; i < gs->num_images; i++)
+		gr->destroy_image(gr->egl_display, gs->images[i]);
+
+	gs->num_images = 0;
+}
+
+static void
+destroy_textures(struct gl_surface_state *gs)
+{
+	glDeleteTextures(gs->num_textures, gs->textures);
+	gs->num_textures = 0;
+}
+
+static void
 gl_renderer_attach_shm(struct weston_surface *es, struct weston_buffer *buffer,
 		       struct wl_shm_buffer *shm_buffer)
 {
@@ -1153,9 +1171,6 @@ gl_renderer_attach_egl(struct weston_surface *es, struct weston_buffer *buffer,
 	gr->query_buffer(gr->egl_display, buffer->legacy_buffer,
 			 EGL_WAYLAND_Y_INVERTED_WL, &buffer->y_inverted);
 
-	for (i = 0; i < gs->num_images; i++)
-		gr->destroy_image(gr->egl_display, gs->images[i]);
-	gs->num_images = 0;
 	gs->target = GL_TEXTURE_2D;
 	switch (format) {
 	case EGL_TEXTURE_RGB:
@@ -1199,10 +1214,11 @@ gl_renderer_attach_egl(struct weston_surface *es, struct weston_buffer *buffer,
 						 buffer->legacy_buffer,
 						 attribs);
 		if (!gs->images[i]) {
+ 			gs->num_images = i;
+ 			destroy_images(gr, gs);
 			weston_log("failed to create img for plane %d\n", i);
-			continue;
+			return;
 		}
-		gs->num_images++;
 
 		glActiveTexture(GL_TEXTURE0 + i);
 		glBindTexture(gs->target, gs->textures[i]);
@@ -1210,6 +1226,7 @@ gl_renderer_attach_egl(struct weston_surface *es, struct weston_buffer *buffer,
 					    gs->images[i]);
 	}
 
+	gs->num_images = num_planes;
 	gs->pitch = buffer->width;
 	gs->height = buffer->height;
 	gs->buffer_type = BUFFER_TYPE_EGL;
@@ -1224,18 +1241,12 @@ gl_renderer_attach(struct weston_surface *es, struct weston_buffer *buffer)
 	struct gl_surface_state *gs = get_surface_state(es);
 	struct wl_shm_buffer *shm_buffer;
 	EGLint format;
-	int i;
 
 	weston_buffer_reference(&gs->buffer_ref, buffer);
+	destroy_images(gr, gs);
 
 	if (!buffer) {
-		for (i = 0; i < gs->num_images; i++) {
-			gr->destroy_image(gr->egl_display, gs->images[i]);
-			gs->images[i] = NULL;
-		}
-		gs->num_images = 0;
-		glDeleteTextures(gs->num_textures, gs->textures);
-		gs->num_textures = 0;
+		destroy_textures(gs);
 		gs->buffer_type = BUFFER_TYPE_NULL;
 		gs->y_inverted = 1;
 		return;
@@ -1279,17 +1290,13 @@ gl_renderer_surface_set_color(struct weston_surface *surface,
 static void
 surface_state_destroy(struct gl_surface_state *gs, struct gl_renderer *gr)
 {
-	int i;
-
 	wl_list_remove(&gs->surface_destroy_listener.link);
 	wl_list_remove(&gs->renderer_destroy_listener.link);
 
 	gs->surface->renderer_state = NULL;
 
-	glDeleteTextures(gs->num_textures, gs->textures);
-
-	for (i = 0; i < gs->num_images; i++)
-		gr->destroy_image(gr->egl_display, gs->images[i]);
+	destroy_textures(gs);
+	destroy_images(gr, gs);
 
 	weston_buffer_reference(&gs->buffer_ref, NULL);
 	pixman_region32_fini(&gs->texture_damage);
