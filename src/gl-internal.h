@@ -122,6 +122,11 @@ struct gl_output_state {
 	enum gl_border_status border_damage[BUFFER_DAMAGE_COUNT];
 	struct gl_border_image borders[4];
 	enum gl_border_status border_status;
+
+	int indirect_disable;
+	int indirect_drawing;
+	GLuint indirect_texture;
+	GLuint indirect_fbo;
 };
 
 enum buffer_type {
