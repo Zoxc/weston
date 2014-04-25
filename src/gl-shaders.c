@@ -150,13 +150,52 @@ append(struct shader_string_list *list, const char *string)
 		*data = str;
 }
 
+static void
+add_conversion(struct shader_builder *sb)
+{
+	int alpha = sb->desc->transparent;
+
+	if (sb->attributes[ATTRIBUTE_CONVERSION] != CONVERSION_FROM_SRGB)
+		return;
+
+	if (alpha)
+		append(&sb->body,
+			"gl_FragColor.rgb *= gl_FragColor.a > 0.0 ? " \
+			"1.0 / gl_FragColor.a : 0.0;\n");
+
+	append(&sb->global, "uniform sampler2D srgb_lut;\n");
+	append(&sb->body,
+		"gl_FragColor.rgb = gl_FragColor.rgb * 0.9473684210526316 + " \
+			"0.02631578947368421;\n" \
+		"gl_FragColor.rgb = vec3(" \
+			"texture2D(srgb_lut, vec2(gl_FragColor.r, 0.5)).x," \
+			"texture2D(srgb_lut, vec2(gl_FragColor.g, 0.5)).x," \
+			"texture2D(srgb_lut, vec2(gl_FragColor.b, 0.5)).x);\n");
+
+	if (alpha)
+		append(&sb->body, "gl_FragColor.rgb *= gl_FragColor.a;\n");
+}
+
+static void
+add_conversion_uniforms(struct shader_builder *builder,
+			struct gl_shader *shader)
+{
+	if (builder->attributes[ATTRIBUTE_CONVERSION] != CONVERSION_FROM_SRGB)
+		return;
+
+	glUniform1i(glGetUniformLocation(shader->program, "srgb_lut"),
+		MAX_PLANES);
+}
+
 static int
 shader_rgbx_constructor(struct shader_builder *sb)
 {
 	append(&sb->global, "uniform sampler2D texture;\n");
 	append(&sb->body,
-		"gl_FragColor.rgb = texture2D(texture, texture_coord).rgb;\n" \
-		"gl_FragColor.a = 1.0;\n");
+		"gl_FragColor.rgb = texture2D(texture, texture_coord).rgb;\n");
+
+	if (sb->attributes[ATTRIBUTE_OUTPUT] != OUTPUT_TO_SRGB)
+		append(&sb->body, "gl_FragColor.a = 1.0;\n");
 
 	return 1;
 }
@@ -167,7 +206,6 @@ shader_rgba_constructor(struct shader_builder *sb)
 	append(&sb->global, "uniform sampler2D texture;\n");
 	append(&sb->body,
 		"gl_FragColor = texture2D(texture, texture_coord);\n");
-
 
 	return 1;
 }
@@ -252,6 +290,9 @@ shader_yuv_uniforms(struct shader_builder *sb, struct gl_shader *shader)
 static int
 shader_solid_constructor(struct shader_builder *sb)
 {
+	if (sb->attributes[ATTRIBUTE_CONVERSION])
+		return 0;
+
 	append(&sb->global, "uniform vec4 color;\n");
 	append(&sb->body, "gl_FragColor = color;\n");
 
@@ -286,6 +327,20 @@ static struct gl_input_type_desc input_type_descs[INPUT_COUNT] = {
 	/* INPUT_SOLID */
 	{1, shader_solid_constructor, shader_solid_uniforms},
 };
+
+static void
+add_to_srgb_conversion(struct shader_builder *sb)
+{
+	append(&sb->global, "uniform sampler2D srgb_lut;\n");
+	append(&sb->body,
+		"gl_FragColor.rgb = gl_FragColor.rgb * 0.9946236559139785 + " \
+			"0.002688172043010753;\n" \
+		"gl_FragColor.rgb = vec3(" \
+			"texture2D(srgb_lut, vec2(gl_FragColor.r, 0.5)).x," \
+			"texture2D(srgb_lut, vec2(gl_FragColor.g, 0.5)).x," \
+			"texture2D(srgb_lut, vec2(gl_FragColor.b, 0.5)).x);\n");
+
+}
 
 static void
 attributes_from_permutation(size_t permutation, size_t *attributes)
@@ -399,6 +454,16 @@ create_shader(struct gl_renderer *gr,
 	sb.renderer = gr;
 	sb.desc = &input_type_descs[sb.attributes[ATTRIBUTE_INPUT]];
 
+	if (sb.attributes[ATTRIBUTE_OUTPUT] == OUTPUT_TO_SRGB) {
+		/* transparent inputs must be blended first */
+		if (sb.desc->transparent)
+			return 0;
+
+		/* useless conversion from and to sRGB */
+		if (sb.attributes[ATTRIBUTE_CONVERSION] == CONVERSION_FROM_SRGB)
+			return 0;
+	}
+
 	shader_builder_init(&sb);
 
 	if (OPENGL_ES_VER)
@@ -413,9 +478,21 @@ create_shader(struct gl_renderer *gr,
 		return 0;
 	}
 
-	append(&sb.body, "gl_FragColor *= alpha;\n");
+	add_conversion(&sb);
 
-	if (gr->fragment_shader_debug)
+	switch (sb.attributes[ATTRIBUTE_OUTPUT]) {
+	case OUTPUT_BLEND:
+		append(&sb.body, "gl_FragColor *= alpha;\n");
+		break;
+	case OUTPUT_TO_SRGB:
+		add_to_srgb_conversion(&sb);
+		break;
+	default:
+		break;
+	}
+
+	if (gr->fragment_shader_debug &&
+			sb.attributes[ATTRIBUTE_OUTPUT] != OUTPUT_TO_SRGB)
 		append(&sb.body, "gl_FragColor = vec4(0.0, 0.3, 0.0, 0.2) + " \
 			"gl_FragColor * 0.8;\n");
 
@@ -433,6 +510,12 @@ create_shader(struct gl_renderer *gr,
 
 	sb.desc->setup_uniforms(&sb, shader);
 
+	add_conversion_uniforms(&sb, shader);
+
+	if (sb.attributes[ATTRIBUTE_OUTPUT] == OUTPUT_TO_SRGB)
+		glUniform1i(glGetUniformLocation(shader->program, "srgb_lut"),
+			MAX_PLANES);
+
 	shader_builder_release(&sb);
 
 	return 0;
@@ -445,14 +528,15 @@ error:
 struct gl_shader *
 gl_select_shader(struct gl_renderer *gr,
 			enum gl_input_attribute input,
-			enum gl_output_attribute output)
+			enum gl_output_attribute output,
+			enum gl_conversion_attribute conversion)
 {
 	struct gl_shader *shader;
 	size_t index;
 	size_t attributes[ATTRIBUTE_COUNT] = {
 		input,
 		output,
-		CONVERSION_NONE
+		conversion
 	};
 
 	index = permutation_from_attributes(attributes);
@@ -502,6 +586,7 @@ gl_shader_setup(struct gl_shader *shader,
 		       struct weston_view *view,
 		       struct weston_output *output)
 {
+	struct gl_renderer *gr = get_renderer(output->compositor);
 	struct gl_surface_state *gs = get_surface_state(view->surface);
 
 	gl_shader_set_matrix(shader, &output->matrix);
@@ -509,11 +594,77 @@ gl_shader_setup(struct gl_shader *shader,
 	if (gs->input == INPUT_SOLID)
 		glUniform4fv(shader->color_uniform, 1, gs->color);
 
+	if (gs->conversion == CONVERSION_FROM_SRGB) {
+		glActiveTexture(GL_TEXTURE0 + MAX_PLANES);
+		glBindTexture(GL_TEXTURE_2D, gr->srgb_decode_lut);
+	}
+
 	glUniform1f(shader->alpha_uniform, view->alpha);
+}
+
+static void
+setup_lut(GLuint *texture, const void *data,
+	GLsizei entries, GLenum internal_format, GLenum type)
+{
+	glGenTextures(1, texture);
+
+	glBindTexture(GL_TEXTURE_2D, *texture);
+
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+	glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+	glTexImage2D(GL_TEXTURE_2D, 0, internal_format, entries, 1, 0,
+		GL_LUMINANCE, type, data);
+}
+
+static const uint16_t srgb_decode_lut[] = {
+	0, 281, 751, 1519, 2618, 4073, 5919, 8166, 10847, 13984, 17589, 21690,
+	26301, 31424, 37095, 43321, 50125, 57488, 65535
+};
+
+static const uint8_t srgb_encode_lut[] = {
+	0, 17, 27, 34, 40, 46, 50, 55, 59, 62, 66, 69, 72, 75, 78, 80, 83, 85,
+	88, 90, 92, 95, 97, 99, 101, 103, 105, 107, 108, 110, 112, 114, 115,
+	117, 119, 120, 122, 124, 125, 127, 128, 130, 131, 132, 134, 135, 137,
+	138, 139, 141, 142, 143, 145, 146, 147, 148, 149, 151, 152, 153, 154,
+	156, 156, 158, 159, 160, 161, 162, 163, 165, 165, 166, 168, 168, 170,
+	170, 172, 172, 174, 174, 176, 176, 178, 178, 180, 181, 181, 183, 183,
+	185, 185, 186, 187, 188, 189, 190, 190, 192, 192, 194, 194, 195, 196,
+	196, 198, 198, 200, 200, 201, 202, 203, 203, 204, 205, 206, 207, 207,
+	208, 209, 210, 211, 211, 212, 213, 214, 214, 215, 216, 217, 217, 218,
+	219, 221, 218, 222, 222, 223, 223, 224, 225, 226, 226, 227, 228, 228,
+	229, 231, 229, 231, 232, 232, 233, 234, 235, 235, 236, 237, 237, 238,
+	239, 239, 240, 241, 241, 242, 242, 243, 245, 242, 245, 247, 245, 247,
+	248, 248, 249, 249, 250, 252, 250, 252, 253, 253, 255, 252, 255
+};
+
+static void
+setup_luts(struct gl_renderer *gr)
+{
+	setup_lut(&gr->srgb_decode_lut, srgb_decode_lut,
+		ARRAY_LENGTH(srgb_decode_lut),
+		gr->l16_internal_format, GL_UNSIGNED_SHORT);
+
+	setup_lut(&gr->srgb_encode_lut, srgb_encode_lut,
+		ARRAY_LENGTH(srgb_encode_lut), GL_LUMINANCE, GL_UNSIGNED_BYTE);
 }
 
 int
 gl_init_shaders(struct gl_renderer *gr)
+{
+	if (gl_compile_shaders(gr) < 0)
+		return -1;
+
+	if (!OPENGL_ES_VER)
+		setup_luts(gr);
+
+	return 0;
+}
+
+int
+gl_compile_shaders(struct gl_renderer *gr)
 {
 	struct gl_shader **shaders;
 	size_t i, permutations = 1;
@@ -539,7 +690,10 @@ gl_init_shaders(struct gl_renderer *gr)
 	gr->shaders = shaders;
 	gr->shader_count = permutations;
 
-	gr->solid_shader = gl_select_shader(gr, INPUT_SOLID, OUTPUT_BLEND);
+	gr->solid_shader = gl_select_shader(gr,
+		INPUT_SOLID,
+		OUTPUT_BLEND,
+		CONVERSION_NONE);
 
 	/* Force use_shader() to call glUseProgram(), since we need to use
 	 * the recompiled version of the shader. */

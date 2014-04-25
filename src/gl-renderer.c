@@ -413,7 +413,10 @@ repaint_views_start(struct weston_output *output)
 {
 	struct gl_output_state *go = get_output_state(output);
 
-	go->indirect_drawing = 0 && !go->indirect_disable;
+	go->indirect_drawing = get_renderer(output->compositor)->color_managed;
+
+	if (go->indirect_disable)
+		go->indirect_drawing = 0;
 
 	if (go->indirect_drawing) {
 		glBindFramebuffer(GL_FRAMEBUFFER, go->indirect_fbo);
@@ -436,11 +439,16 @@ repaint_views_finish(struct weston_output *output,
 
 		// Viewport is set already by gl_renderer_repaint_output
 
-		shader = gl_select_shader(gr, INPUT_RGBX, OUTPUT_BLEND);
+		shader = gl_select_shader(gr,
+			INPUT_RGBX,
+			OUTPUT_TO_SRGB,
+			CONVERSION_NONE);
 
 		gl_use_shader(gr, shader);
 		gl_shader_set_matrix(shader, &output->matrix);
-		glUniform1f(shader->alpha_uniform, 1.0);
+
+		glActiveTexture(GL_TEXTURE0 + MAX_PLANES);
+		glBindTexture(GL_TEXTURE_2D, gr->srgb_encode_lut);
 
 		glDisable(GL_BLEND);
 
@@ -487,7 +495,7 @@ draw_view(struct weston_view *ev, struct weston_output *output,
 		gl_shader_setup(gr->solid_shader, ev, output);
 	}
 
-	shader = gl_select_shader(gr, gs->input, OUTPUT_BLEND);
+	shader = gl_select_shader(gr, gs->input, OUTPUT_BLEND, gs->conversion);
 
 	gl_use_shader(gr, shader);
 	gl_shader_setup(shader, ev, output);
@@ -518,7 +526,10 @@ draw_view(struct weston_view *ev, struct weston_output *output,
 			 * that forces texture alpha = 1.0.
 			 * Xwayland surfaces need this.
 			 */
-			struct gl_shader *rgbx_shader = gl_select_shader(gr, INPUT_RGBX, OUTPUT_BLEND);
+			struct gl_shader *rgbx_shader = gl_select_shader(gr,
+				INPUT_RGBX,
+				OUTPUT_BLEND,
+				gs->conversion);
 			gl_use_shader(gr, rgbx_shader);
 			gl_shader_setup(rgbx_shader, ev, output);
 		}
@@ -654,7 +665,8 @@ draw_output_borders(struct weston_output *output,
 	if (border_status == BORDER_STATUS_CLEAN)
 		return; /* Clean. Nothing to do. */
 
-	shader = gl_select_shader(gr, INPUT_RGBA, OUTPUT_BLEND);
+	shader = gl_select_shader(gr, INPUT_RGBA, OUTPUT_BLEND,
+		CONVERSION_NONE);
 
 	top = &go->borders[GL_RENDERER_BORDER_TOP];
 	bottom = &go->borders[GL_RENDERER_BORDER_BOTTOM];
@@ -664,7 +676,7 @@ draw_output_borders(struct weston_output *output,
 	full_width = output->current_mode->width + left->width + right->width;
 	full_height = output->current_mode->height + top->height + bottom->height;
 
-	shader = gl_select_shader(gr, INPUT_RGBA, OUTPUT_BLEND);
+	shader = gl_select_shader(gr, INPUT_RGBA, OUTPUT_BLEND, CONVERSION_NONE);
 
 	glDisable(GL_BLEND);
 	gl_use_shader(gr, shader);
@@ -1238,6 +1250,11 @@ gl_renderer_attach(struct weston_surface *es, struct weston_buffer *buffer)
 		gs->buffer_type = BUFFER_TYPE_NULL;
 		gs->y_inverted = 1;
 	}
+
+	if (gr->color_managed)
+		gs->conversion = CONVERSION_FROM_SRGB;
+	else
+		gs->conversion = CONVERSION_NONE;
 }
 
 static void
@@ -1252,6 +1269,7 @@ gl_renderer_surface_set_color(struct weston_surface *surface,
 	gs->color[3] = alpha;
 
 	gs->input = INPUT_SOLID;
+	gs->conversion = CONVERSION_NONE;
 }
 
 static void
@@ -1720,6 +1738,9 @@ gl_renderer_create(struct weston_compositor *ec, EGLNativeDisplayType display,
 		goto err_egl;
 	}
 
+	if (!OPENGL_ES_VER)
+		gr->color_managed = ec->color_managed;
+
 	ec->renderer = &gr->base;
 	ec->capabilities |= WESTON_CAP_ROTATION_ANY;
 	ec->capabilities |= WESTON_CAP_CAPTURE_YFLIP;
@@ -1754,7 +1775,7 @@ fragment_debug_binding(struct weston_seat *seat, uint32_t time, uint32_t key,
 
 	gr->fragment_shader_debug ^= 1;
 
-	gl_init_shaders(gr);
+	gl_compile_shaders(gr);
 
 	weston_compositor_damage_all(ec);
 }
@@ -1777,6 +1798,7 @@ gl_renderer_setup(struct weston_compositor *ec, EGLSurface egl_surface)
 	const char *extensions;
 	EGLConfig context_config;
 	EGLBoolean ret;
+	GLint param;
 
 #if !OPENGL_ES_VER
 	static const EGLint context_attribs[] = {
@@ -1788,6 +1810,8 @@ gl_renderer_setup(struct weston_compositor *ec, EGLSurface egl_surface)
 	gr->bgra_internal_format = GL_RGBA;
 	gr->bgra_format = GL_BGRA;
 	gr->short_type = GL_UNSIGNED_SHORT;
+	gr->rgba16_internal_format = GL_RGBA16;
+	gr->l16_internal_format = GL_LUMINANCE16;
 #else
 	static const EGLint context_attribs[] = {
 		EGL_CONTEXT_CLIENT_VERSION, 2,
@@ -1797,6 +1821,8 @@ gl_renderer_setup(struct weston_compositor *ec, EGLSurface egl_surface)
 	gr->bgra_internal_format = GL_BGRA_EXT;
 	gr->bgra_format = GL_BGRA_EXT;
 	gr->short_type = GL_UNSIGNED_BYTE;
+	gr->rgba16_internal_format = GL_RGBA;
+	gr->l16_internal_format = GL_LUMINANCE;
 #endif
 
 	if (!eglBindAPI(OPENGL_ES_VER ? EGL_OPENGL_ES_API : EGL_OPENGL_API)) {
@@ -1853,6 +1879,16 @@ gl_renderer_setup(struct weston_compositor *ec, EGLSurface egl_surface)
 
 	if (OPENGL_ES_VER && !strstr(extensions, "GL_EXT_texture_format_BGRA8888")) {
 		weston_log("GL_EXT_texture_format_BGRA8888 not available\n");
+		return -1;
+	}
+
+	glGetIntegerv(GL_MAX_TEXTURE_IMAGE_UNITS, &param);
+
+	if (gr->color_managed)
+		param--;
+
+	if (param < MAX_PLANES) {
+		weston_log("Too few OpenGL texture units available\n");
 		return -1;
 	}
 
