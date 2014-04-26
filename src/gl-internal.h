@@ -159,6 +159,8 @@ struct gl_surface_state {
 	GLenum target;
 	int num_images;
 
+	int srgb_image;
+
 	struct weston_buffer_reference buffer_ref;
 	enum buffer_type buffer_type;
 	int pitch; /* in pixels */
@@ -216,6 +218,8 @@ struct gl_renderer {
 
 	int has_configless_context;
 
+	int has_image_srgb;
+
 	struct gl_shader *solid_shader;
 	struct gl_shader *current_shader;
 
@@ -249,6 +253,9 @@ get_renderer(struct weston_compositor *ec)
 {
 	return (struct gl_renderer *)ec->renderer;
 }
+
+int
+gl_input_type_opaque(enum gl_input_attribute input);
 
 int
 gl_init_shaders(struct gl_renderer *gr);

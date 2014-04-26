@@ -76,5 +76,11 @@ typedef EGLBoolean (EGLAPIENTRYP PFNEGLQUERYWAYLANDBUFFERWL) (EGLDisplay dpy, st
 #define GL_UNPACK_SKIP_PIXELS_EXT                               0x0CF4
 #endif
 
+#ifndef EGL_MESA_image_sRGB
+#define EGL_MESA_image_sRGB 1
+#define EGL_GAMMA_MESA 0x3290 /* eglCreateImageKHR attribute */
+#define EGL_DEFAULT_MESA 0x3291
+#define EGL_BAD_VIEW_MESA 0x3292
+#endif
 
 #endif
